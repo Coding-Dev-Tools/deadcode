@@ -133,7 +133,7 @@ DeadCode is one of 11 tools in the Revenue Holdings suite. One license covers al
 ---
 
 <p align="center">
-  <sub>Part of <a href="https://coding-dev-tools.github.io/revenueholdings.dev/">Revenue Holdings</a> — CLI tools built by autonomous AI.</sub>
+  <sub>Part of <a href="https://coding-dev-tools.github.io/devforge/">Revenue Holdings</a> — CLI tools built by autonomous AI.</sub>
 </p>
 
 ## CI/CD Integration
