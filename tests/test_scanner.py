@@ -294,6 +294,28 @@ class TestCLIIntegration:
         assert "Files scanned" in result.output
         assert "Unused exports" in result.output
 
+    def test_scan_fail_threshold_exceeded(self, runner, sample_project):
+        """scan --fail N exits 1 when findings >= N."""
+        result = runner.invoke(cli, ["-p", str(sample_project), "scan", "--fail", "0"])
+        assert result.exit_code == 1
+
+    def test_scan_fail_threshold_not_exceeded(self, runner, sample_project):
+        """scan --fail N exits 0 when findings < N."""
+        result = runner.invoke(cli, ["-p", str(sample_project), "scan", "--fail", "999"])
+        assert result.exit_code == 0
+
+    def test_scan_subcommand_help(self, runner):
+        result = runner.invoke(cli, ["scan", "--help"])
+        assert result.exit_code == 0
+        assert "--json-output" in result.output
+        assert "--category" in result.output
+        assert "--fail" in result.output
+
+    def test_remove_help(self, runner):
+        result = runner.invoke(cli, ["remove", "--help"])
+        assert result.exit_code == 0
+        assert "--dry-run" in result.output
+
     def test_main_module_entry_point(self, runner):
         """Test that python -m deadcode works (__main__ entry point fix)."""
         import subprocess
