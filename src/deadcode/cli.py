@@ -175,6 +175,9 @@ def remove(ctx: click.Context, dry_run: bool, category: str | None) -> None:
     project = ctx.obj["project"]
     ignore = _merge_config_ignore(ctx)
 
+    if require_license:
+        require_license("deadcode")
+
     if not dry_run:
         console.print("[red]WARNING: This will modify files. Use --dry-run first![/red]")
         console.print("[dim]Press Ctrl+C to abort. Running in 3 seconds...[/dim]")
