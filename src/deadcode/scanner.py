@@ -225,9 +225,18 @@ class DeadCodeScanner:
                 if not self.ignore_spec.match_file(f"{rel_root}/{d}/" if rel_root != "." else f"{d}/")
             ]
 
+            # Filter out non-included directories when include_spec is set
+            if self.include_spec:
+                dirs[:] = [
+                    d for d in dirs
+                    if self.include_spec.match_file(f"{rel_root}/{d}/" if rel_root != "." else f"{d}/")
+                ]
+
             for fname in filenames:
                 rel_path = f"{rel_root}/{fname}" if rel_root != "." else fname
                 if self.ignore_spec.match_file(rel_path):
+                    continue
+                if self.include_spec and not self.include_spec.match_file(rel_path):
                     continue
 
                 # Apply include filter if set (gitignore-style whitelist)

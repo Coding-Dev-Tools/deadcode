@@ -256,4 +256,66 @@ class TestLicenseDepRemoved:
 
     def test_remove_dry_run_without_license(self, runner, sample_project):
         result = runner.invoke(cli, ["-p", str(sample_project), "remove", "--dry-run"])
+
+class TestIncludeCLI:
+    """Tests for the --include CLI option (whitelist)."""
+
+    def test_include_filters_scan(self, runner, tmp_path):
+        """--include should limit scan to matching directories."""
+        mod = tmp_path / "src" / "mod.ts"
+        mod.parent.mkdir(parents=True, exist_ok=True)
+        mod.write_text('export function unusedInSrc() { return 1; }\n')
+
+        lib = tmp_path / "lib" / "helper.ts"
+        lib.parent.mkdir(parents=True, exist_ok=True)
+        lib.write_text('export function unusedInLib() { return 2; }\n')
+
+        result = runner.invoke(cli, ["-p", str(tmp_path), "--include", "src/", "scan", "--json-output"])
+        assert result.exit_code == 0
+        data = json.loads(result.output, strict=False)
+        finding_names = {f["name"] for f in data["findings"]}
+        assert "unusedInSrc" in finding_names
+        assert "unusedInLib" not in finding_names
+
+    def test_include_multiple_dirs(self, runner, tmp_path):
+        """Multiple --include flags should scan all matching dirs."""
+        mod = tmp_path / "src" / "mod.ts"
+        mod.parent.mkdir(parents=True, exist_ok=True)
+        mod.write_text('export function foo() { return 1; }\n')
+
+        lib = tmp_path / "lib" / "helper.ts"
+        lib.parent.mkdir(parents=True, exist_ok=True)
+        lib.write_text('export function bar() { return 2; }\n')
+
+        result = runner.invoke(cli, ["-p", str(tmp_path), "--include", "src/", "--include", "lib/", "scan", "--json-output"])
+        assert result.exit_code == 0
+        data = json.loads(result.output, strict=False)
+        assert data["files_scanned"] == 2
+
+    def test_include_in_stats(self, runner, tmp_path):
+        """--include should also work with stats command."""
+        mod = tmp_path / "src" / "mod.ts"
+        mod.parent.mkdir(parents=True, exist_ok=True)
+        mod.write_text('export function foo() { return 1; }\n')
+
+        lib = tmp_path / "lib" / "helper.ts"
+        lib.parent.mkdir(parents=True, exist_ok=True)
+        lib.write_text('export function bar() { return 2; }\n')
+
+        result = runner.invoke(cli, ["-p", str(tmp_path), "--include", "src/", "stats"])
+        assert result.exit_code == 0
+        assert "Files scanned: 1" in result.output
+
+    def test_include_in_remove_dry_run(self, runner, tmp_path):
+        """--include should also work with remove --dry-run."""
+        mod = tmp_path / "src" / "mod.ts"
+        mod.parent.mkdir(parents=True, exist_ok=True)
+        mod.write_text('export function foo() { return 1; }\n')
+
+        lib = tmp_path / "lib" / "helper.ts"
+        lib.parent.mkdir(parents=True, exist_ok=True)
+        lib.write_text('export function bar() { return 2; }\n')
+
+        result = runner.invoke(cli, ["-p", str(tmp_path), "--include", "src/", "remove", "--dry-run"])
+
         assert result.exit_code == 0
