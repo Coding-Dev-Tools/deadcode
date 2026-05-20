@@ -308,3 +308,52 @@ class TestCLIIntegration:
         assert "scan" in result.stdout
         assert "remove" in result.stdout
         assert "stats" in result.stdout
+
+
+class TestIncludePatterns:
+    """Tests for the include_patterns scanner feature."""
+
+    def test_include_patterns_filters_files(self, tmp_path):
+        """When include_patterns is set, only matching files should be scanned."""
+        # Create files in two dirs
+        mod = tmp_path / "src" / "mod.ts"
+        mod.parent.mkdir(parents=True, exist_ok=True)
+        mod.write_text('export function foo() { return 1; }\\n')
+
+        lib = tmp_path / "lib" / "helper.ts"
+        lib.parent.mkdir(parents=True, exist_ok=True)
+        lib.write_text('export function bar() { return 2; }\\n')
+
+        scanner = DeadCodeScanner(tmp_path, include_patterns=["src/"])
+        result = scanner.scan()
+
+        # Only src/mod.ts should be scanned, not lib/helper.ts
+        assert result.files_scanned == 1
+
+    def test_include_patterns_allows_multiple(self, tmp_path):
+        """include_patterns can specify multiple directories."""
+        mod = tmp_path / "src" / "mod.ts"
+        mod.parent.mkdir(parents=True, exist_ok=True)
+        mod.write_text('export function foo() { return 1; }\\n')
+
+        lib = tmp_path / "lib" / "helper.ts"
+        lib.parent.mkdir(parents=True, exist_ok=True)
+        lib.write_text('export function bar() { return 2; }\\n')
+
+        scanner = DeadCodeScanner(tmp_path, include_patterns=["src/", "lib/"])
+        result = scanner.scan()
+        assert result.files_scanned == 2
+
+    def test_include_patterns_none_scans_all(self, tmp_path):
+        """When include_patterns is None, all scannable files are included."""
+        mod = tmp_path / "src" / "mod.ts"
+        mod.parent.mkdir(parents=True, exist_ok=True)
+        mod.write_text('export function foo() { return 1; }\\n')
+
+        lib = tmp_path / "lib" / "helper.ts"
+        lib.parent.mkdir(parents=True, exist_ok=True)
+        lib.write_text('export function bar() { return 2; }\\n')
+
+        scanner = DeadCodeScanner(tmp_path)
+        result = scanner.scan()
+        assert result.files_scanned == 2

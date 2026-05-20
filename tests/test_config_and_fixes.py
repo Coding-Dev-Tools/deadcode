@@ -232,8 +232,8 @@ class TestLicenseDepRemoved:
 
     def test_no_license_import_in_cli(self):
         """The cli module should not reference revenueholdings_license."""
-        import inspect
         import deadcode.cli as cli_mod
+        import inspect
         source = inspect.getsource(cli_mod)
         assert "revenueholdings_license" not in source
         assert "require_license" not in source
