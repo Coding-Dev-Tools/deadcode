@@ -225,3 +225,35 @@ class TestBugFixUnreferencedComponents:
 
         comp_names = {f.name for f in result.unreferenced_components}
         assert "Orphan" in comp_names
+
+
+class TestLicenseDepRemoved:
+    """Verify revenueholdings-license is fully removed and commands work without it."""
+
+    def test_no_license_import_in_cli(self):
+        """The cli module should not reference revenueholdings_license."""
+        import inspect
+        import deadcode.cli as cli_mod
+        source = inspect.getsource(cli_mod)
+        assert "revenueholdings_license" not in source
+        assert "require_license" not in source
+
+    def test_no_license_optional_dep(self):
+        """pyproject.toml should not have license optional dep."""
+        from pathlib import Path
+        pyproject = Path(__file__).parent.parent / "pyproject.toml"
+        content = pyproject.read_text()
+        assert "revenueholdings-license" not in content
+
+    def test_scan_works_without_license(self, runner, sample_project):
+        """All commands should work without the license package."""
+        result = runner.invoke(cli, ["-p", str(sample_project), "scan"])
+        assert result.exit_code == 0
+
+    def test_stats_works_without_license(self, runner, sample_project):
+        result = runner.invoke(cli, ["-p", str(sample_project), "stats"])
+        assert result.exit_code == 0
+
+    def test_remove_dry_run_without_license(self, runner, sample_project):
+        result = runner.invoke(cli, ["-p", str(sample_project), "remove", "--dry-run"])
+        assert result.exit_code == 0
