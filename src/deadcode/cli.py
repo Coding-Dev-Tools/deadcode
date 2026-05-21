@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-import click
 import json
 import sys
 from pathlib import Path
+
+import click
 from rich.console import Console
 from rich.table import Table
 

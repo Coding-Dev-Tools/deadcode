@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
+
 import pytest
+
 from deadcode.cli import cli
 from deadcode.scanner import DeadCodeScanner
-from pathlib import Path
 
 
 @pytest.fixture

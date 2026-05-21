@@ -10,10 +10,11 @@ Detects:
 from __future__ import annotations
 
 import os
-import pathspec
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+
+import pathspec
 
 # ── Data structures ───────────────────────────────────────────────────
 
@@ -236,9 +237,6 @@ class DeadCodeScanner:
                 rel_path = f"{rel_root}/{fname}" if rel_root != "." else fname
                 if self.ignore_spec.match_file(rel_path):
                     continue
-                if self.include_spec and not self.include_spec.match_file(rel_path):
-                    continue
-
                 # Apply include filter if set (gitignore-style whitelist)
                 if self.include_spec and not self.include_spec.match_file(rel_path):
                     continue
