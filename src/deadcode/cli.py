@@ -22,9 +22,10 @@ ALL_CATEGORIES = ["unused_export", "dead_route", "orphaned_css", "unreferenced_c
 @click.group()
 @click.option("--project", "-p", default=".", help="Project directory to scan")
 @click.option("--ignore", "-i", multiple=True, help="Additional ignore patterns (gitignore-style)")
+@click.option("--include", multiple=True, help="Include only matching files (gitignore-style whitelist)")
 @click.version_option(__version__, prog_name="deadcode")
 @click.pass_context
-def cli(ctx: click.Context, project: str, ignore: tuple[str, ...]) -> None:
+def cli(ctx: click.Context, project: str, ignore: tuple[str, ...], include: tuple[str, ...]) -> None:
     """DeadCode — Find and remove dead code in TS/React/Next.js projects.
 
     Scans for unused exports, dead routes, orphaned CSS classes,
@@ -33,6 +34,7 @@ def cli(ctx: click.Context, project: str, ignore: tuple[str, ...]) -> None:
     ctx.ensure_object(dict)
     ctx.obj["project"] = project
     ctx.obj["ignore"] = list(ignore) if ignore else None
+    ctx.obj["include"] = list(include) if include else None
     # Load .deadcode.yml config
     ctx.obj["config"] = DeadCodeConfig.load(project)
 
@@ -76,7 +78,8 @@ def scan(ctx: click.Context, json_output: bool, category: str | None, fail_thres
         err_console.print(f"[red]Project directory '{project}' not found.[/red]")
         sys.exit(1)
 
-    scanner = DeadCodeScanner(project, ignore_patterns=ignore)
+    include_patterns = ctx.obj.get("include")
+    scanner = DeadCodeScanner(project, ignore_patterns=ignore, include_patterns=include_patterns)
     result = scanner.scan()
 
     # Filter by category
@@ -174,7 +177,8 @@ def remove(ctx: click.Context, dry_run: bool, category: str | None) -> None:
         import time
         time.sleep(3)
 
-    scanner = DeadCodeScanner(project, ignore_patterns=ignore)
+    include_patterns = ctx.obj.get("include")
+    scanner = DeadCodeScanner(project, ignore_patterns=ignore, include_patterns=include_patterns)
     result = scanner.scan()
 
     findings = result.findings
@@ -241,7 +245,8 @@ def stats(ctx: click.Context) -> None:
     """Show quick stats about the project's dead code."""
     project = ctx.obj["project"]
     ignore = _merge_config_ignore(ctx)
-    scanner = DeadCodeScanner(project, ignore_patterns=ignore)
+    include_patterns = ctx.obj.get("include")
+    scanner = DeadCodeScanner(project, ignore_patterns=ignore, include_patterns=include_patterns)
     result = scanner.scan()
 
     console.print(f"Files scanned: [bold]{result.files_scanned}[/bold]")
