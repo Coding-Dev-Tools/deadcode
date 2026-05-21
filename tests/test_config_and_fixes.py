@@ -319,3 +319,41 @@ class TestIncludeCLI:
         result = runner.invoke(cli, ["-p", str(tmp_path), "--include", "src/", "remove", "--dry-run"])
 
         assert result.exit_code == 0
+
+    def test_include_with_ignore_more_restrictive(self, runner, tmp_path):
+        """--include and --ignore should work together (include first, then ignore)."""
+        mod = tmp_path / "src" / "mod.ts"
+        mod.parent.mkdir(parents=True, exist_ok=True)
+        mod.write_text('export function foo() { return 1; }\n')
+
+        internal = tmp_path / "src" / "internal" / "helper.ts"
+        internal.parent.mkdir(parents=True, exist_ok=True)
+        internal.write_text('export function bar() { return 2; }\n')
+
+        result = runner.invoke(cli, ["-p", str(tmp_path), "--include", "src/", "-i", "src/internal/", "scan", "--json-output"])
+        assert result.exit_code == 0
+        data = json.loads(result.output, strict=False)
+        assert data["files_scanned"] == 1, "only mod.ts should be scanned, internal/ ignored"
+        finding_names = {f["name"] for f in data["findings"]}
+        assert "foo" in finding_names
+        assert "bar" not in finding_names
+
+    def test_include_no_match_returns_no_files(self, runner, tmp_path):
+        """--include matching nothing should yield 0 files scanned."""
+        mod = tmp_path / "src" / "mod.ts"
+        mod.parent.mkdir(parents=True, exist_ok=True)
+        mod.write_text('export function foo() { return 1; }\n')
+
+        result = runner.invoke(cli, ["-p", str(tmp_path), "--include", "nonexistent/", "scan", "--json-output"])
+        assert result.exit_code == 0
+        data = json.loads(result.output, strict=False)
+        assert data["files_scanned"] == 0
+
+    def test_include_invalid_pattern_graceful(self, runner, tmp_path):
+        """--include should handle invalid gitignore patterns without crashing."""
+        mod = tmp_path / "src" / "mod.ts"
+        mod.parent.mkdir(parents=True, exist_ok=True)
+        mod.write_text('export function foo() { return 1; }\n')
+
+        result = runner.invoke(cli, ["-p", str(tmp_path), "--include", "src/[invalid", "scan"])
+        assert result.exit_code in (0, 2), "should not crash, may produce error or proceed"
