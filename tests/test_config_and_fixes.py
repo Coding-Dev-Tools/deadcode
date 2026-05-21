@@ -256,6 +256,7 @@ class TestLicenseDepRemoved:
 
     def test_remove_dry_run_without_license(self, runner, sample_project):
         result = runner.invoke(cli, ["-p", str(sample_project), "remove", "--dry-run"])
+        assert result.exit_code == 0
 
 class TestIncludeCLI:
     """Tests for the --include CLI option (whitelist)."""
