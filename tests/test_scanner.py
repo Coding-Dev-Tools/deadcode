@@ -293,6 +293,38 @@ class TestCLIIntegration:
         assert "Files scanned" in result.output
         assert "Unused exports" in result.output
 
+    def test_scan_ignore_option(self, runner, tmp_path):
+        """--ignore option should exclude matching files from scan."""
+        mod = tmp_path / "src" / "mod.ts"
+        mod.parent.mkdir(parents=True, exist_ok=True)
+        mod.write_text('export function unusedFunc() { return 1; }\n')
+
+        result = runner.invoke(cli, ["-p", str(tmp_path), "-i", "src/", "scan", "--json-output"])
+        assert result.exit_code == 0
+        import json
+        data = json.loads(result.output, strict=False)
+        assert data["files_scanned"] == 0, "src/ ignored, should have 0 files"
+
+    def test_remove_category_filter(self, runner, sample_project):
+        """remove --dry-run --category should filter by category."""
+        result = runner.invoke(cli, ["-p", str(sample_project), "remove", "--dry-run", "-c", "orphaned_css"])
+        assert result.exit_code == 0
+        # Should mention orphaned class
+        assert "orphaned-class" in result.output or "Nothing removable" in result.output
+
+    def test_remove_nonexistent_dir(self, runner):
+        """remove should give graceful error for nonexistent project dir."""
+        result = runner.invoke(cli, ["-p", "/nonexistent/test/path", "remove", "--dry-run"])
+        assert result.exit_code != 0
+        assert "not found" in result.output
+
+    def test_stats_nonexistent_dir(self, runner):
+        """stats should handle nonexistent project dir gracefully."""
+        result = runner.invoke(cli, ["-p", "/nonexistent/stats/path", "stats"])
+        # Should not crash — scan returns 0 files for nonexistent dir
+        assert result.exit_code == 0
+        assert "Files scanned: 0" in result.output
+
     def test_main_module_entry_point(self, runner):
         """Test that python -m deadcode works (__main__ entry point fix)."""
         import subprocess

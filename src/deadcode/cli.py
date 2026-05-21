@@ -171,6 +171,10 @@ def remove(ctx: click.Context, dry_run: bool, category: str | None) -> None:
     project = ctx.obj["project"]
     ignore = _merge_config_ignore(ctx)
 
+    if not Path(project).exists():
+        err_console.print(f"[red]Project directory '{project}' not found.[/red]")
+        sys.exit(1)
+
     if not dry_run:
         console.print("[red]WARNING: This will modify files. Use --dry-run first![/red]")
         console.print("[dim]Press Ctrl+C to abort. Running in 3 seconds...[/dim]")
