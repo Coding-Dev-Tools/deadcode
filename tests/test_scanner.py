@@ -341,6 +341,85 @@ class TestCLIIntegration:
         assert "stats" in result.stdout
 
 
+class TestScanFailThreshold:
+    """Tests for the scan --fail threshold CI feature."""
+
+    def test_fail_exits_1_when_findings_exceed_threshold(self, runner, sample_project):
+        """scan --fail 1 should exit 1 when findings >= 1."""
+        result = runner.invoke(cli, ["-p", str(sample_project), "scan", "--fail", "1"])
+        assert result.exit_code == 1
+        assert "FAIL" in result.output
+
+    def test_fail_exits_0_when_findings_below_threshold(self, runner, tmp_path):
+        """scan --fail 999 should exit 0 since findings < 999."""
+        mod = tmp_path / "mod.ts"
+        mod.write_text('export function foo() { return 1; }\n')
+        result = runner.invoke(cli, ["-p", str(tmp_path), "scan", "--fail", "999"])
+        assert result.exit_code == 0
+
+    def test_fail_with_json_output(self, runner, sample_project):
+        """scan --fail --json-output should still exit 1 and print JSON."""
+        result = runner.invoke(cli, ["-p", str(sample_project), "scan", "--fail", "1", "--json-output"])
+        assert result.exit_code == 1
+        # Should still produce valid JSON
+        data = json.loads(result.output, strict=False)
+        assert "findings" in data
+
+    def test_fail_zero_means_always_fail(self, runner, sample_project):
+        """scan --fail 0 should exit 1 since findings >= 0 (any finding triggers)."""
+        result = runner.invoke(cli, ["-p", str(sample_project), "scan", "--fail", "0"])
+        assert result.exit_code == 1
+
+
+class TestCLIIncludeOption:
+    """Tests for --include CLI option with scan, remove, and stats."""
+
+    def test_scan_include_filters_files(self, runner, tmp_path):
+        """--include should whitelist only matching paths."""
+        src_mod = tmp_path / "src" / "mod.ts"
+        src_mod.parent.mkdir(parents=True, exist_ok=True)
+        src_mod.write_text('export function foo() { return 1; }\n')
+
+        lib_mod = tmp_path / "lib" / "helper.ts"
+        lib_mod.parent.mkdir(parents=True, exist_ok=True)
+        lib_mod.write_text('export function bar() { return 2; }\n')
+
+        result = runner.invoke(cli, ["-p", str(tmp_path), "--include", "src/", "scan", "--json-output"])
+        assert result.exit_code == 0
+        data = json.loads(result.output, strict=False)
+        assert data["files_scanned"] == 1
+
+    def test_remove_include_filters(self, runner, tmp_path):
+        """remove --dry-run with --include should respect the whitelist."""
+        src_mod = tmp_path / "src" / "mod.ts"
+        src_mod.parent.mkdir(parents=True, exist_ok=True)
+        src_mod.write_text('export function unusedFunc() { return 1; }\n')
+
+        lib_mod = tmp_path / "lib" / "helper.ts"
+        lib_mod.parent.mkdir(parents=True, exist_ok=True)
+        lib_mod.write_text('export function unusedLib() { return 2; }\n')
+
+        result = runner.invoke(cli, ["-p", str(tmp_path), "--include", "src/", "remove", "--dry-run"])
+        assert result.exit_code == 0
+        # Only src/mod.ts should be scanned, so only unusedFunc appears
+        if "unusedFunc" in result.output:
+            assert "unusedLib" not in result.output
+
+    def test_stats_include_filters(self, runner, tmp_path):
+        """stats with --include should report only whitelisted files."""
+        src_mod = tmp_path / "src" / "mod.ts"
+        src_mod.parent.mkdir(parents=True, exist_ok=True)
+        src_mod.write_text('export function foo() { return 1; }\n')
+
+        lib_mod = tmp_path / "lib" / "helper.ts"
+        lib_mod.parent.mkdir(parents=True, exist_ok=True)
+        lib_mod.write_text('export function bar() { return 2; }\n')
+
+        result = runner.invoke(cli, ["-p", str(tmp_path), "--include", "src/", "stats"])
+        assert result.exit_code == 0
+        assert "Files scanned: 1" in result.output
+
+
 class TestIncludePatterns:
     """Tests for the include_patterns scanner feature."""
 
