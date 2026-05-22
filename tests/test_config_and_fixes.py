@@ -435,6 +435,44 @@ class TestRemoveNonDryRun:
             assert result.exit_code == 0
 
 
+class TestPackagingQuality:
+    """Tests for packaging quality: entry point, py.typed, ruff config."""
+
+    def test_console_scripts_entry_point(self):
+        """The 'deadcode' console_scripts entry point should resolve."""
+        from importlib.metadata import entry_points
+
+        eps = entry_points()
+        # Python 3.12+ returns a SelectableGroups; 3.10 returns dict
+        scripts = eps.select(group="console_scripts") if hasattr(eps, "select") else eps.get("console_scripts", [])
+        deadcode_eps = [e for e in scripts if e.name == "deadcode"]
+        assert len(deadcode_eps) >= 1, "Expected at least one 'deadcode' console_scripts entry point"
+        ep = deadcode_eps[0]
+        assert "deadcode.cli:cli" in str(ep.value) or "deadcode.cli:cli" in str(ep)
+
+    def test_py_typed_marker_exists(self):
+        """PEP 561 py.typed marker should exist in the package."""
+        from pathlib import Path
+
+        import deadcode
+
+        pkg_dir = Path(deadcode.__file__).parent
+        assert (pkg_dir / "py.typed").exists(), "py.typed marker missing — needed for PEP 561 type-checking support"
+
+    def test_ruff_known_first_party(self):
+        """ruff known-first-party should be ['deadcode'], not ['*']."""
+        from pathlib import Path
+
+        import tomllib
+
+        pyproject = Path(__file__).parent.parent / "pyproject.toml"
+        with open(pyproject, "rb") as f:
+            data = tomllib.load(f)
+        isort_cfg = data.get("tool", {}).get("ruff", {}).get("lint", {}).get("isort", {})
+        kfp = isort_cfg.get("known-first-party", [])
+        assert kfp == ["deadcode"], f"known-first-party should be ['deadcode'], got {kfp}"
+
+
 class TestScannerEdgeCases:
     """Edge case tests for scanner uncovered paths."""
 
