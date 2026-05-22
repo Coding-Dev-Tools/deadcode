@@ -80,9 +80,9 @@ _ROUTE_PATTERN = re.compile(
     r"(?:app|src/app|pages|src/pages)/(.*?)/(?:page|route)\.(?:tsx|ts|jsx|js)$",
 )
 
-# CSS class selectors
+# CSS class selectors (supports Tailwind utility classes with colon-separated segments like hover:bg-red)
 _CSS_CLASS_PATTERN = re.compile(
-    r"\.([a-zA-Z_][\w-]*)\s*(?:\{|,|:|\[)",
+    r"\.([a-zA-Z_][\w-]*(?::[\w-]+)*)\s*(?:\{|,|\[)",
 )
 
 # import statements
@@ -236,10 +236,6 @@ class DeadCodeScanner:
                 rel_path = f"{rel_root}/{fname}" if rel_root != "." else fname
                 if self.ignore_spec.match_file(rel_path):
                     continue
-                if self.include_spec and not self.include_spec.match_file(rel_path):
-                    continue
-
-                # Apply include filter if set (gitignore-style whitelist)
                 if self.include_spec and not self.include_spec.match_file(rel_path):
                     continue
 
