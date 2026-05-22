@@ -239,10 +239,6 @@ class DeadCodeScanner:
                 if self.include_spec and not self.include_spec.match_file(rel_path):
                     continue
 
-                # Apply include filter if set (gitignore-style whitelist)
-                if self.include_spec and not self.include_spec.match_file(rel_path):
-                    continue
-
                 filepath = Path(root) / fname
                 if self._is_scannable_file(rel_path):
                     files.append(filepath)
