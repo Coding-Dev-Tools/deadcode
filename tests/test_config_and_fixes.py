@@ -507,9 +507,24 @@ class TestScannerEdgeCases:
         result = scanner.scan()
 
         orphaned = {f.name for f in result.orphaned_css}
-        assert "hover:bg-red" not in orphaned
-        assert "focus:ring" not in orphaned
+        # Utility-prefixed classes should be skipped (starts with hover:, focus:)
+        assert "hover:bg-red" not in orphaned, \
+            "hover:bg-red should be skipped by utility prefix check"
+        assert "focus:ring" not in orphaned, \
+            "focus:ring should be skipped by utility prefix check"
+        # Normal class without a utility prefix IS orphaned
         assert "normal-class" in orphaned
+        # Verify the full utility class names are captured (not truncated at colon)
+        css_classes = set()
+        for finding in result.findings:
+            if finding.category == "orphaned_css":
+                css_classes.add(finding.name)
+        # If hover:bg-red or focus:ring appear as orphaned (before skip), that's expected
+        # Names like 'hover' or 'focus' alone should NOT appear (regression check)
+        assert "hover" not in orphaned, \
+            "hover should not appear alone — it's part of hover:bg-red"
+        assert "focus" not in orphaned, \
+            "focus should not appear alone — it's part of focus:ring"
 
     def test_scan_read_error_recorded(self, tmp_path):
         """Scanner should record errors for files it can't read."""

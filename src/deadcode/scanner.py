@@ -80,9 +80,9 @@ _ROUTE_PATTERN = re.compile(
     r"(?:app|src/app|pages|src/pages)/(.*?)/(?:page|route)\.(?:tsx|ts|jsx|js)$",
 )
 
-# CSS class selectors
+# CSS class selectors (supports Tailwind utility classes with colon-separated segments like hover:bg-red)
 _CSS_CLASS_PATTERN = re.compile(
-    r"\.([a-zA-Z_][\w-]*)\s*(?:\{|,|:|\[)",
+    r"\.([a-zA-Z_][\w-]*(?::[\w-]+)*)\s*(?:\{|,|\[)",
 )
 
 # import statements
