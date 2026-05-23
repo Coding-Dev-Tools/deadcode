@@ -388,3 +388,51 @@ class TestIncludePatterns:
         scanner = DeadCodeScanner(tmp_path)
         result = scanner.scan()
         assert result.files_scanned == 2
+
+class TestScanFormat:
+    """Tests for the new --format scan option."""
+
+    def test_format_compact(self, runner, sample_project):
+        result = runner.invoke(cli, ["-p", str(sample_project), "scan", "--format=compact"])
+        assert result.exit_code == 0
+
+    def test_format_github(self, runner, sample_project):
+        result = runner.invoke(cli, ["-p", str(sample_project), "scan", "--format=github"])
+        assert result.exit_code == 0
+
+    def test_format_compact_with_findings(self, runner, sample_project):
+        result = runner.invoke(cli, ["-p", str(sample_project), "scan", "--format=compact"])
+        assert result.exit_code == 0
+        assert "unusedHelper" in result.output or "No dead code" in result.output
+
+    def test_format_github_with_findings(self, runner, sample_project):
+        result = runner.invoke(cli, ["-p", str(sample_project), "scan", "--format=github"])
+        assert result.exit_code == 0
+        assert "::" in result.output or "No dead code" in result.output
+
+    def test_format_json_legacy_alias(self, runner, sample_project):
+        result = runner.invoke(cli, ["-p", str(sample_project), "scan", "--json-output"])
+        assert result.exit_code == 0
+        data = json.loads(result.output, strict=False)
+        assert "findings" in data
+
+    def test_format_json_explicit(self, runner, sample_project):
+        result = runner.invoke(cli, ["-p", str(sample_project), "scan", "--format=json"])
+        assert result.exit_code == 0
+        data = json.loads(result.output, strict=False)
+        assert "findings" in data
+
+    def test_format_compact_empty(self, runner, tmp_path):
+        result = runner.invoke(cli, ["-p", str(tmp_path), "scan", "--format=compact"])
+        assert result.exit_code == 0
+        assert "OK \u2014 0 findings" in result.output
+
+    def test_format_github_empty(self, runner, tmp_path):
+        result = runner.invoke(cli, ["-p", str(tmp_path), "scan", "--format=github"])
+        assert result.exit_code == 0
+        assert "deadcode: 0 findings" in result.output
+
+    def test_format_pretty_default(self, runner, sample_project):
+        result = runner.invoke(cli, ["-p", str(sample_project), "scan"])
+        assert result.exit_code == 0
+        assert "DeadCode Scan" in result.output
