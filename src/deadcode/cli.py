@@ -73,7 +73,13 @@ def _get_fail_threshold(ctx: click.Context) -> int:
 @click.option("--fail", "fail_threshold", type=int, default=None,
               help="Exit code 1 if findings >= threshold (overrides .deadcode.yml)")
 @click.pass_context
-def scan(ctx: click.Context, json_output: bool, format: str | None, category: str | None, fail_threshold: int | None) -> None:
+def scan(
+    ctx: click.Context,
+    json_output: bool,
+    format: str | None,
+    category: str | None,
+    fail_threshold: int | None,
+) -> None:
     """Scan project for dead code."""
     project = ctx.obj["project"]
     ignore = _merge_config_ignore(ctx)
