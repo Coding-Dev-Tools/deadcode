@@ -46,8 +46,14 @@ Changelog = "https://github.com/Coding-Dev-Tools/deadcode/releases"
 [project.scripts]
 deadcode = "deadcode.cli:cli"
 
+[tool.setuptools]
+include-package-data = true
+
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+deadcode = ["py.typed"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
