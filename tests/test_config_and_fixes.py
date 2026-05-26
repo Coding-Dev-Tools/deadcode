@@ -291,7 +291,9 @@ class TestIncludeCLI:
         lib.parent.mkdir(parents=True, exist_ok=True)
         lib.write_text('export function bar() { return 2; }\n')
 
-        result = runner.invoke(cli, ["-p", str(tmp_path), "--include", "src/", "--include", "lib/", "scan", "--json-output"])
+        result = runner.invoke(
+            cli, ["-p", str(tmp_path), "--include", "src/", "--include", "lib/", "scan", "--json-output"],
+        )
         assert result.exit_code == 0
         data = json.loads(result.output, strict=False)
         assert data["files_scanned"] == 2
@@ -334,7 +336,9 @@ class TestIncludeCLI:
         internal.parent.mkdir(parents=True, exist_ok=True)
         internal.write_text('export function bar() { return 2; }\n')
 
-        result = runner.invoke(cli, ["-p", str(tmp_path), "--include", "src/", "-i", "src/internal/", "scan", "--json-output"])
+        result = runner.invoke(
+            cli, ["-p", str(tmp_path), "--include", "src/", "-i", "src/internal/", "scan", "--json-output"],
+        )
         assert result.exit_code == 0
         data = json.loads(result.output, strict=False)
         assert data["files_scanned"] == 1, "only mod.ts should be scanned, internal/ ignored"
