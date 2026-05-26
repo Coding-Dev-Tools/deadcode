@@ -479,6 +479,20 @@ class TestPackagingQuality:
         kfp = isort_cfg.get("known-first-party", [])
         assert kfp == ["deadcode"], f"known-first-party should be ['deadcode'], got {kfp}"
 
+    def test_package_data_includes_py_typed(self):
+        """pyproject.toml should have package-data config for py.typed."""
+        from pathlib import Path
+
+        import tomllib
+
+        pyproject = Path(__file__).parent.parent / "pyproject.toml"
+        with open(pyproject, "rb") as f:
+            data = tomllib.load(f)
+        pkg_data = data.get("tool", {}).get("setuptools", {}).get("package-data", {})
+        assert "deadcode" in pkg_data, "Expected [tool.setuptools.package-data] section for 'deadcode'"
+        assert "py.typed" in pkg_data["deadcode"], \
+            f"Expected 'py.typed' in package-data for deadcode, got {pkg_data['deadcode']}"
+
 
 class TestScannerEdgeCases:
     """Edge case tests for scanner uncovered paths."""
