@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 
 import pytest
+
+from deadcode.cli import cli
 
 
 class TestMainModule:
@@ -32,6 +35,31 @@ class TestCliEdgeCases:
         )
         assert result.returncode == 1
 
+    def test_fail_threshold_exits_high(self, tmp_path):
+        """--fail=0 exits 1 when findings exist (covers fail threshold path)."""
+        (tmp_path / "src" / "unused.ts").parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / "src" / "unused.ts").write_text("export function unused() { return 1; }\n")
+        result = subprocess.run(
+            [sys.executable, "-m", "deadcode", "-p", str(tmp_path), "scan",
+             "--fail", "0"],
+            capture_output=True, text=True,
+        )
+        assert result.returncode == 1
+        assert "FAIL" in result.stdout
+
+    def test_ignore_flag_before_subcommand(self, tmp_path):
+        """--ignore group option rejects submodule patterns (covers _merge_config_ignore)."""
+        (tmp_path / "src" / "used.ts").parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / "src" / "used.ts").write_text("export function used() { return 1; }\n")
+        (tmp_path / "src" / "unused.ts").write_text("export function unused() { return 2; }\n")
+        result = subprocess.run(
+            [sys.executable, "-m", "deadcode", "-p", str(tmp_path),
+             "--ignore", "**/unused.ts", "scan"],
+            capture_output=True, text=True,
+        )
+        assert result.returncode == 0
+        assert "unused" not in result.stdout
+
 
 class TestCliFormatOutput:
     """Tests for scan --format output modes (added in PR #34)."""
@@ -54,7 +82,6 @@ class TestCliFormatOutput:
 
     def test_format_compact_output(self, runner, sample):
         """--format=compact produces one-line-per-finding output."""
-        from deadcode.cli import cli
         result = runner.invoke(cli, ["-p", str(sample), "scan", "--format", "compact"])
         assert result.exit_code == 0
         assert "0 findings" not in result.output
@@ -63,7 +90,6 @@ class TestCliFormatOutput:
 
     def test_format_github_annotations(self, runner, sample):
         """--format=github produces ::warning/::error annotations."""
-        from deadcode.cli import cli
         result = runner.invoke(cli, ["-p", str(sample), "scan", "--format", "github"])
         assert result.exit_code == 0
         assert "::warning" in result.output or "::error" in result.output
@@ -71,16 +97,12 @@ class TestCliFormatOutput:
 
     def test_format_pretty_default(self, runner, sample):
         """Default pretty format shows table output."""
-        from deadcode.cli import cli
         result = runner.invoke(cli, ["-p", str(sample), "scan", "--format", "pretty"])
         assert result.exit_code == 0
         assert "DeadCode Scan" in result.output
 
     def test_legacy_json_output_still_works(self, runner, sample):
         """Legacy --json-output flag maps to --format=json."""
-        import json
-
-        from deadcode.cli import cli
         result = runner.invoke(cli, ["-p", str(sample), "scan", "--json-output"])
         assert result.exit_code == 0
         # Scanner details may contain newlines; use strict=False
