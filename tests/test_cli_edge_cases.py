@@ -78,8 +78,9 @@ class TestCliFormatOutput:
 
     def test_legacy_json_output_still_works(self, runner, sample):
         """Legacy --json-output flag maps to --format=json."""
-        from deadcode.cli import cli
         import json
+
+        from deadcode.cli import cli
         result = runner.invoke(cli, ["-p", str(sample), "scan", "--json-output"])
         assert result.exit_code == 0
         # Scanner details may contain newlines; use strict=False
