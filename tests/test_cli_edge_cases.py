@@ -110,3 +110,39 @@ class TestCliFormatOutput:
         assert "findings" in payload
         assert "files_scanned" in payload
         assert len(payload["findings"]) >= 1
+
+
+class TestRemoveCommand:
+    """Tests for the `remove` CLI command."""
+
+    @pytest.fixture
+    def runner(self):
+        from click.testing import CliRunner
+        return CliRunner()
+
+    def test_remove_dry_run_nothing_removable(self, runner, tmp_path):
+        """remove --dry-run on clean project prints nothing removable."""
+        (tmp_path / "src" / "clean.ts").parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / "src" / "clean.ts").write_text("const x = 1;\n")
+        result = runner.invoke(cli, ["-p", str(tmp_path), "remove", "--dry-run"])
+        assert result.exit_code == 0
+        assert "Nothing removable" in result.output
+
+
+class TestStatsCommand:
+    """Tests for the `stats` CLI command."""
+
+    @pytest.fixture
+    def runner(self):
+        from click.testing import CliRunner
+        return CliRunner()
+
+    def test_stats_basic(self, runner, tmp_path):
+        """stats command shows scan summary."""
+        (tmp_path / "src" / "unused.ts").parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / "src" / "unused.ts").write_text(
+            "export function unusedHelper() { return 1; }\n"
+        )
+        result = runner.invoke(cli, ["-p", str(tmp_path), "stats"])
+        assert result.exit_code == 0
+        assert "Files scanned" in result.output
