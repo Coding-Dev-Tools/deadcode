@@ -65,9 +65,10 @@ _EXPORT_PATTERN = re.compile(
     re.MULTILINE,
 )
 
-# export { name }
+# export { name } — may span multiple lines; [^}] matches newlines too
 _EXPORT_LIST_PATTERN = re.compile(
     r"export\s*\{([^}]+)\}",
+    re.DOTALL,
 )
 
 # React component: function Name or const Name = ...
@@ -80,9 +81,9 @@ _ROUTE_PATTERN = re.compile(
     r"(?:app|src/app|pages|src/pages)/(.*?)/(?:page|route)\.(?:tsx|ts|jsx|js)$",
 )
 
-# CSS class selectors
+# CSS class selectors (supports Tailwind utility classes with colon-separated segments like hover:bg-red)
 _CSS_CLASS_PATTERN = re.compile(
-    r"\.([a-zA-Z_][\w-]*)\s*(?:\{|,|:|\[)",
+    r"\.([a-zA-Z_][\w-]*(?::[\w-]+)*)\s*(?:\{|,|\[)",
 )
 
 # import statements
@@ -225,9 +226,18 @@ class DeadCodeScanner:
                 if not self.ignore_spec.match_file(f"{rel_root}/{d}/" if rel_root != "." else f"{d}/")
             ]
 
+            # Filter out non-included directories when include_spec is set
+            if self.include_spec:
+                dirs[:] = [
+                    d for d in dirs
+                    if self.include_spec.match_file(f"{rel_root}/{d}/" if rel_root != "." else f"{d}/")
+                ]
+
             for fname in filenames:
                 rel_path = f"{rel_root}/{fname}" if rel_root != "." else fname
                 if self.ignore_spec.match_file(rel_path):
+                    continue
+                if self.include_spec and not self.include_spec.match_file(rel_path):
                     continue
 
                 filepath = Path(root) / fname
@@ -251,19 +261,37 @@ class DeadCodeScanner:
     def _parse_exports(
         self, content: str, rel_path: str, exports: dict[str, list[tuple[str, int]]]
     ) -> None:
-        """Extract export names from a file."""
+        """Extract export names from a file.
+
+        Handles both single-line forms::
+
+            export function foo() {}
+            export const BAR = 1;
+
+        And multi-line export-list blocks::
+
+            export {
+              Foo,
+              Bar as Baz,
+            }
+        """
+        # Named/typed exports: scan line-by-line to preserve line numbers cheaply.
         for i, line in enumerate(content.splitlines(), 1):
-            # Named exports
             for m in _EXPORT_PATTERN.finditer(line):
                 name = m.group(1)
                 exports.setdefault(name, []).append((rel_path, i))
 
-            # Export lists: export { Foo, Bar }
-            for m in _EXPORT_LIST_PATTERN.finditer(line):
-                names = [n.strip().split(" as ")[0].strip() for n in m.group(1).split(",")]
-                for name in names:
-                    if name and re.match(r"^[A-Za-z_$][\w$]*$", name):
-                        exports.setdefault(name, []).append((rel_path, i))
+        # Export-list blocks: applied to the full content so that multi-line
+        # blocks like ``export {\n  Foo,\n  Bar\n}`` are captured correctly.
+        # [^}] matches newlines, so re.DOTALL is added for clarity but [^}]
+        # already handles multi-line spans without it.
+        for m in _EXPORT_LIST_PATTERN.finditer(content):
+            # Determine the line number of the opening ``export {``.
+            line_num = content.count("\n", 0, m.start()) + 1
+            names = [n.strip().split(" as ")[0].strip() for n in m.group(1).split(",")]
+            for name in names:
+                if name and re.match(r"^[A-Za-z_$][\w$]*$", name):
+                    exports.setdefault(name, []).append((rel_path, line_num))
 
     def _parse_imports(
         self, content: str, rel_path: str, imports: dict[str, set[str]]
