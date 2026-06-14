@@ -129,6 +129,14 @@ class TestConfig:
         # Should fall back to defaults
         assert config.ignore == []
 
+    def test_load_yaml_list_returns_defaults(self, tmp_path):
+        """When .deadcode.yml is a list (not a dict), config falls back to defaults (covers config.py:56)."""
+        config_file = tmp_path / ".deadcode.yml"
+        config_file.write_text("- item1\n- item2\n")
+        config = DeadCodeConfig.load(tmp_path)
+        assert config.ignore == []
+        assert config.fail_threshold == -1
+
 
 class TestFailOption:
     def test_fail_exits_1_when_threshold_met(self, runner, sample_project):
@@ -192,6 +200,23 @@ class TestConfigIgnoreMerge:
         assert result.exit_code == 0
         data = json.loads(result.output, strict=False)
         assert len(data["findings"]) == 0
+
+    def test_merge_config_and_cli_ignore(self, runner, tmp_path):
+        """Both config ignore AND CLI --ignore should merge together (covers cli.py:52 branch)."""
+        mod = tmp_path / "src" / "mod.ts"
+        mod.parent.mkdir(parents=True, exist_ok=True)
+        mod.write_text('export function unused() { return 1; }\n')
+
+        config = tmp_path / ".deadcode.yml"
+        config.write_text('ignore:\n  - "nonexistent/"\n')
+
+        # CLI --ignore with a matching pattern
+        result = runner.invoke(cli, ["-p", str(tmp_path), "-i", "*.ts", "scan", "--json-output"])
+        assert result.exit_code == 0
+        data = json.loads(result.output, strict=False)
+        # Both ignores combined should cover the .ts file
+        assert len(data["findings"]) == 0, \
+            f"Expected 0 findings with merged ignores, got {len(data['findings'])}"
 
 
 class TestBugFixUnreferencedComponents:
@@ -441,6 +466,28 @@ class TestRemoveNonDryRun:
             # If there are removable findings, verify the output is still valid
             assert result.exit_code == 0
 
+    def test_remove_missing_file_skips_gracefully(self, tmp_path):
+        """remove should skip files that disappeared after scan (covers cli.py:248 path)."""
+        mod = tmp_path / "src" / "mod.ts"
+        mod.parent.mkdir(parents=True, exist_ok=True)
+        mod.write_text('export function unusedFunc() { return 1; }\n')
+
+        from click.testing import CliRunner
+        runner = CliRunner()
+
+        import json
+        scan_result = runner.invoke(cli, ["-p", str(tmp_path), "scan", "--json-output"])
+        assert scan_result.exit_code == 0
+        data = json.loads(scan_result.output, strict=False)
+        removable = [f for f in data["findings"] if f.get("removable")]
+        if removable:
+            fpath = tmp_path / removable[0]["file"]
+            if fpath.exists():
+                fpath.unlink()
+
+        result = runner.invoke(cli, ["-p", str(tmp_path), "remove", "-c", "unused_export"])
+        assert result.exit_code == 0
+
 
 class TestPackagingQuality:
     """Tests for packaging quality: entry point, py.typed, ruff config."""
@@ -478,6 +525,20 @@ class TestPackagingQuality:
         isort_cfg = data.get("tool", {}).get("ruff", {}).get("lint", {}).get("isort", {})
         kfp = isort_cfg.get("known-first-party", [])
         assert kfp == ["deadcode"], f"known-first-party should be ['deadcode'], got {kfp}"
+
+    def test_package_data_includes_py_typed(self):
+        """pyproject.toml should have package-data config for py.typed."""
+        from pathlib import Path
+
+        import tomllib
+
+        pyproject = Path(__file__).parent.parent / "pyproject.toml"
+        with open(pyproject, "rb") as f:
+            data = tomllib.load(f)
+        pkg_data = data.get("tool", {}).get("setuptools", {}).get("package-data", {})
+        assert "deadcode" in pkg_data, "Expected [tool.setuptools.package-data] section for 'deadcode'"
+        assert "py.typed" in pkg_data["deadcode"], \
+            f"Expected 'py.typed' in package-data for deadcode, got {pkg_data['deadcode']}"
 
 
 class TestScannerEdgeCases:
@@ -590,4 +651,37 @@ class TestScannerEdgeCases:
             result = scanner.scan()
 
         assert len(result.errors) > 0
-        assert result.files_scanned == 1  # file was still counted
+        assert result.files_scanned == 1
+
+    def test_default_import_parsed_correctly(self, tmp_path):
+        """Default imports (import Foo from) should be parsed (covers scanner.py:290-292)."""
+        mod = tmp_path / "src" / "helper.ts"
+        mod.parent.mkdir(parents=True, exist_ok=True)
+        mod.write_text('export function helper() { return 1; }\n')
+
+        consumer = tmp_path / "src" / "consumer.ts"
+        consumer.write_text('import helper from "./helper";\nhelper();\n')
+
+        scanner = DeadCodeScanner(tmp_path)
+        result = scanner.scan()
+
+        unused_names = {f.name for f in result.unused_exports}
+        assert "helper" not in unused_names, \
+            "helper should be recognized as imported via default import"
+
+    def test_scan_collect_files_with_ignore(self, tmp_path):
+        """Scanner._collect_files handles ignore_spec correctly (covers scanner.py:238-241)."""
+        mod = tmp_path / "src" / "mod.ts"
+        mod.parent.mkdir(parents=True, exist_ok=True)
+        mod.write_text('export function foo() { return 1; }\n')
+
+        internal = tmp_path / "src" / "internal" / "helper.ts"
+        internal.parent.mkdir(parents=True, exist_ok=True)
+        internal.write_text('export function bar() { return 2; }\n')
+
+        scanner = DeadCodeScanner(tmp_path, ignore_patterns=["src/internal/"])
+        result = scanner.scan()
+        assert result.files_scanned == 1, "internal/ should be ignored"
+        unused_names = {f.name for f in result.unused_exports}
+        assert "foo" in unused_names
+        assert "bar" not in unused_names  # file was still counted
