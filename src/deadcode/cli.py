@@ -12,7 +12,10 @@ from rich.table import Table
 try:
     from revenueholdings_license import require_license
 except ImportError:
-    require_license = None
+    import warnings
+    warnings.warn("revenueholdings-license not installed; license checks skipped", stacklevel=2)
+    def require_license(product: str) -> None:  # type: ignore[misc]
+        pass
 
 from . import __version__
 from .config import DeadCodeConfig
