@@ -424,6 +424,28 @@ class TestMultiLineExportList:
         export_names = {f.name for f in result.unused_exports}
         assert "alpha" in export_names
         assert "beta" in export_names
+
+    def test_export_list_with_inline_comments(self, tmp_path):
+        """Inline // comments inside export lists should not mask other exports."""
+        mod = tmp_path / "src" / "mod.ts"
+        mod.parent.mkdir(parents=True, exist_ok=True)
+        mod.write_text(
+            "function Alpha() { return 1; }\n"
+            "function Beta() { return 2; }\n"
+            "export {\n"
+            "  Alpha, // kept for clarity\n"
+            "  Beta,\n"
+            "}\n"
+        )
+
+        scanner = DeadCodeScanner(tmp_path)
+        result = scanner.scan()
+
+        export_names = {f.name for f in result.unused_exports}
+        assert "Alpha" in export_names
+        assert "Beta" in export_names
+
+
 class TestIncludePatterns:
     """Tests for the include_patterns scanner feature."""
 

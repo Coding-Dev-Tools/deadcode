@@ -289,7 +289,10 @@ class DeadCodeScanner:
         for m in _EXPORT_LIST_PATTERN.finditer(content):
             # Determine the line number of the opening ``export {``.
             line_num = content.count("\n", 0, m.start()) + 1
-            names = [n.strip().split(" as ")[0].strip() for n in m.group(1).split(",")]
+            raw = m.group(1)
+            # Strip // comments so inline-annotated export lists still parse.
+            cleaned = "\n".join(line.split("//")[0] for line in raw.splitlines())
+            names = [n.strip().split(" as ")[0].strip() for n in cleaned.split(",")]
             for name in names:
                 if name and re.match(r"^[A-Za-z_$][\w$]*$", name):
                     exports.setdefault(name, []).append((rel_path, line_num))
