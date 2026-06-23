@@ -81,11 +81,22 @@ deadcode stats
 - **Monorepo support** — handles large projects efficiently with ignore patterns
 - **CI integration** — JSON output for automated pipelines and gating
 
-## Ignore Patterns
+## Ignore / Include Patterns
 
 ```bash
+# Ignore specific paths
 deadcode scan -i "generated/" -i "**/*.generated.ts"
+
+# Include only matching paths (whitelist)
+deadcode scan --include "src/"                          # Only scan src/
+deadcode scan --include "src/" --include "lib/"          # Multiple dirs
+deadcode remove --dry-run --include "packages/"          # Works with remove
+deadcode stats --include "app/"                          # Works with stats
 ```
+
+`--include` accepts gitignore-style patterns and is repeatable (specify multiple targets).
+When both `--include` and `-i`/`--ignore` are used, `--include` is applied first, then
+`--ignore` excludes any matches within the included paths.
 
 Default ignores: `node_modules/`, `.git/`, `.next/`, `dist/`, `build/`, `public/`, `static/`
 
@@ -122,7 +133,7 @@ DeadCode is one of 11 tools in the Revenue Holdings suite. One license covers al
 ---
 
 <p align="center">
-  <sub>Part of <a href="https://coding-dev-tools.github.io/revenueholdings.dev/">Revenue Holdings</a> — CLI tools built by autonomous AI.</sub>
+  <sub>Part of <a href="https://coding-dev-tools.github.io/devforge/">Revenue Holdings</a> — CLI tools built by autonomous AI.</sub>
 </p>
 
 ## CI/CD Integration

@@ -71,3 +71,7 @@ Thumbs.db
 research/
 fixtures/generated/
 .ruff_cache/
+
+# Operational state (not for commit)
+LEARNING/
+_cowork_ops/

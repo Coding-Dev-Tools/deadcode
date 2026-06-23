@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
+
 import pytest
+
 from deadcode.cli import cli
 from deadcode.scanner import DeadCodeScanner
-from pathlib import Path
 
 
 @pytest.fixture
@@ -275,9 +277,8 @@ class TestCLIIntegration:
     def test_scan_category_filter(self, runner, sample_project):
         result = runner.invoke(cli, ["-p", str(sample_project), "scan", "-c", "orphaned_css"])
         assert result.exit_code == 0
-        json.loads(result.output) if "--json-output" in [] else None
-        # Just check it doesn't crash
-        assert "Orphaned CSS" in result.output or result.exit_code == 0
+        # Text output should mention the category
+        assert "Orphaned CSS" in result.output
 
     def test_scan_nonexistent_dir(self, runner):
         result = runner.invoke(cli, ["-p", "/nonexistent/path", "scan"])
@@ -293,6 +294,38 @@ class TestCLIIntegration:
         assert result.exit_code == 0
         assert "Files scanned" in result.output
         assert "Unused exports" in result.output
+
+    def test_scan_ignore_option(self, runner, tmp_path):
+        """--ignore option should exclude matching files from scan."""
+        mod = tmp_path / "src" / "mod.ts"
+        mod.parent.mkdir(parents=True, exist_ok=True)
+        mod.write_text('export function unusedFunc() { return 1; }\n')
+
+        result = runner.invoke(cli, ["-p", str(tmp_path), "-i", "src/", "scan", "--json-output"])
+        assert result.exit_code == 0
+        import json
+        data = json.loads(result.output, strict=False)
+        assert data["files_scanned"] == 0, "src/ ignored, should have 0 files"
+
+    def test_remove_category_filter(self, runner, sample_project):
+        """remove --dry-run --category should filter by category."""
+        result = runner.invoke(cli, ["-p", str(sample_project), "remove", "--dry-run", "-c", "orphaned_css"])
+        assert result.exit_code == 0
+        # Should mention orphaned class
+        assert "orphaned-class" in result.output or "Nothing removable" in result.output
+
+    def test_remove_nonexistent_dir(self, runner):
+        """remove should give graceful error for nonexistent project dir."""
+        result = runner.invoke(cli, ["-p", "/nonexistent/test/path", "remove", "--dry-run"])
+        assert result.exit_code != 0
+        assert "not found" in result.output
+
+    def test_stats_nonexistent_dir(self, runner):
+        """stats should handle nonexistent project dir gracefully."""
+        result = runner.invoke(cli, ["-p", "/nonexistent/stats/path", "stats"])
+        # Should not crash — scan returns 0 files for nonexistent dir
+        assert result.exit_code == 0
+        assert "Files scanned: 0" in result.output
 
     def test_main_module_entry_point(self, runner):
         """Test that python -m deadcode works (__main__ entry point fix)."""
@@ -391,3 +424,98 @@ class TestMultiLineExportList:
         export_names = {f.name for f in result.unused_exports}
         assert "alpha" in export_names
         assert "beta" in export_names
+class TestIncludePatterns:
+    """Tests for the include_patterns scanner feature."""
+
+    def test_include_patterns_filters_files(self, tmp_path):
+        """When include_patterns is set, only matching files should be scanned."""
+        # Create files in two dirs
+        mod = tmp_path / "src" / "mod.ts"
+        mod.parent.mkdir(parents=True, exist_ok=True)
+        mod.write_text('export function foo() { return 1; }\\n')
+
+        lib = tmp_path / "lib" / "helper.ts"
+        lib.parent.mkdir(parents=True, exist_ok=True)
+        lib.write_text('export function bar() { return 2; }\\n')
+
+        scanner = DeadCodeScanner(tmp_path, include_patterns=["src/"])
+        result = scanner.scan()
+
+        # Only src/mod.ts should be scanned, not lib/helper.ts
+        assert result.files_scanned == 1
+
+    def test_include_patterns_allows_multiple(self, tmp_path):
+        """include_patterns can specify multiple directories."""
+        mod = tmp_path / "src" / "mod.ts"
+        mod.parent.mkdir(parents=True, exist_ok=True)
+        mod.write_text('export function foo() { return 1; }\\n')
+
+        lib = tmp_path / "lib" / "helper.ts"
+        lib.parent.mkdir(parents=True, exist_ok=True)
+        lib.write_text('export function bar() { return 2; }\\n')
+
+        scanner = DeadCodeScanner(tmp_path, include_patterns=["src/", "lib/"])
+        result = scanner.scan()
+        assert result.files_scanned == 2
+
+    def test_include_patterns_none_scans_all(self, tmp_path):
+        """When include_patterns is None, all scannable files are included."""
+        mod = tmp_path / "src" / "mod.ts"
+        mod.parent.mkdir(parents=True, exist_ok=True)
+        mod.write_text('export function foo() { return 1; }\\n')
+
+        lib = tmp_path / "lib" / "helper.ts"
+        lib.parent.mkdir(parents=True, exist_ok=True)
+        lib.write_text('export function bar() { return 2; }\\n')
+
+        scanner = DeadCodeScanner(tmp_path)
+        result = scanner.scan()
+        assert result.files_scanned == 2
+
+class TestScanFormat:
+    """Tests for the new --format scan option."""
+
+    def test_format_compact(self, runner, sample_project):
+        result = runner.invoke(cli, ["-p", str(sample_project), "scan", "--format=compact"])
+        assert result.exit_code == 0
+
+    def test_format_github(self, runner, sample_project):
+        result = runner.invoke(cli, ["-p", str(sample_project), "scan", "--format=github"])
+        assert result.exit_code == 0
+
+    def test_format_compact_with_findings(self, runner, sample_project):
+        result = runner.invoke(cli, ["-p", str(sample_project), "scan", "--format=compact"])
+        assert result.exit_code == 0
+        assert "unusedHelper" in result.output or "No dead code" in result.output
+
+    def test_format_github_with_findings(self, runner, sample_project):
+        result = runner.invoke(cli, ["-p", str(sample_project), "scan", "--format=github"])
+        assert result.exit_code == 0
+        assert "::" in result.output or "No dead code" in result.output
+
+    def test_format_json_legacy_alias(self, runner, sample_project):
+        result = runner.invoke(cli, ["-p", str(sample_project), "scan", "--json-output"])
+        assert result.exit_code == 0
+        data = json.loads(result.output, strict=False)
+        assert "findings" in data
+
+    def test_format_json_explicit(self, runner, sample_project):
+        result = runner.invoke(cli, ["-p", str(sample_project), "scan", "--format=json"])
+        assert result.exit_code == 0
+        data = json.loads(result.output, strict=False)
+        assert "findings" in data
+
+    def test_format_compact_empty(self, runner, tmp_path):
+        result = runner.invoke(cli, ["-p", str(tmp_path), "scan", "--format=compact"])
+        assert result.exit_code == 0
+        assert "OK \u2014 0 findings" in result.output
+
+    def test_format_github_empty(self, runner, tmp_path):
+        result = runner.invoke(cli, ["-p", str(tmp_path), "scan", "--format=github"])
+        assert result.exit_code == 0
+        assert "deadcode: 0 findings" in result.output
+
+    def test_format_pretty_default(self, runner, sample_project):
+        result = runner.invoke(cli, ["-p", str(sample_project), "scan"])
+        assert result.exit_code == 0
+        assert "DeadCode Scan" in result.output

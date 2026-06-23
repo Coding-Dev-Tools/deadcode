@@ -2,17 +2,13 @@
 
 from __future__ import annotations
 
-import click
 import json
 import sys
 from pathlib import Path
+
+import click
 from rich.console import Console
 from rich.table import Table
-
-try:
-    from revenueholdings_license import require_license
-except ImportError:
-    require_license = None
 
 from . import __version__
 from .config import DeadCodeConfig
@@ -21,15 +17,18 @@ from .scanner import DeadCodeScanner, Finding
 console = Console()
 err_console = Console(stderr=True)
 
+FORMAT_HELP = "Output format: pretty (default), compact, github, or json"
 ALL_CATEGORIES = ["unused_export", "dead_route", "orphaned_css", "unreferenced_component"]
+FORMAT_CHOICES = click.Choice(["pretty", "compact", "github", "json"])
 
 
 @click.group()
 @click.option("--project", "-p", default=".", help="Project directory to scan")
 @click.option("--ignore", "-i", multiple=True, help="Additional ignore patterns (gitignore-style)")
+@click.option("--include", multiple=True, help="Include only matching files (gitignore-style whitelist)")
 @click.version_option(__version__, prog_name="deadcode")
 @click.pass_context
-def cli(ctx: click.Context, project: str, ignore: tuple[str, ...]) -> None:
+def cli(ctx: click.Context, project: str, ignore: tuple[str, ...], include: tuple[str, ...]) -> None:
     """DeadCode — Find and remove dead code in TS/React/Next.js projects.
 
     Scans for unused exports, dead routes, orphaned CSS classes,
@@ -38,6 +37,7 @@ def cli(ctx: click.Context, project: str, ignore: tuple[str, ...]) -> None:
     ctx.ensure_object(dict)
     ctx.obj["project"] = project
     ctx.obj["ignore"] = list(ignore) if ignore else None
+    ctx.obj["include"] = list(include) if include else None
     # Load .deadcode.yml config
     ctx.obj["config"] = DeadCodeConfig.load(project)
 
@@ -67,15 +67,20 @@ def _get_fail_threshold(ctx: click.Context) -> int:
 
 
 @cli.command()
-@click.option("--json-output", "-j", is_flag=True, help="Output as JSON")
+@click.option("--json-output", "-j", is_flag=True, help="Alias for --format=json (deprecated)")
+@click.option("--format", type=FORMAT_CHOICES, default="pretty", help=FORMAT_HELP)
 @click.option("--category", "-c", type=click.Choice(ALL_CATEGORIES), default=None, help="Filter by category")
 @click.option("--fail", "fail_threshold", type=int, default=None,
               help="Exit code 1 if findings >= threshold (overrides .deadcode.yml)")
 @click.pass_context
-def scan(ctx: click.Context, json_output: bool, category: str | None, fail_threshold: int | None) -> None:
+def scan(
+    ctx: click.Context,
+    json_output: bool,
+    format: str | None,
+    category: str | None,
+    fail_threshold: int | None,
+) -> None:
     """Scan project for dead code."""
-    if require_license:
-        require_license("deadcode")
     project = ctx.obj["project"]
     ignore = _merge_config_ignore(ctx)
 
@@ -83,7 +88,8 @@ def scan(ctx: click.Context, json_output: bool, category: str | None, fail_thres
         err_console.print(f"[red]Project directory '{project}' not found.[/red]")
         sys.exit(1)
 
-    scanner = DeadCodeScanner(project, ignore_patterns=ignore)
+    include_patterns = ctx.obj.get("include")
+    scanner = DeadCodeScanner(project, ignore_patterns=ignore, include_patterns=include_patterns)
     result = scanner.scan()
 
     # Filter by category
@@ -96,7 +102,10 @@ def scan(ctx: click.Context, json_output: bool, category: str | None, fail_thres
     if not category and config and config.categories:
         findings = [f for f in findings if f.category in config.categories]
 
-    if json_output:
+    # Determine effective format (legacy --json-output maps to json)
+    effective_format = "json" if json_output else (format or "pretty")
+
+    if effective_format == "json":
         output = {
             "files_scanned": result.files_scanned,
             "findings": [
@@ -107,6 +116,26 @@ def scan(ctx: click.Context, json_output: bool, category: str | None, fail_thres
             "errors": result.errors,
         }
         console.print(json.dumps(output, indent=2, default=str))
+    elif effective_format == "compact":
+        if not findings:
+            console.print("OK — 0 findings")
+        else:
+            for f in findings:
+                console.print(f"{f.file}:{f.line} \u2014 {f.category}: {f.name}")
+            console.print(f"\n{len(findings)} findings")
+    elif effective_format == "github":
+        # GitHub Actions annotation syntax
+        # ::warning file={name},line={line},endLine={line}::{message}
+        if not findings:
+            console.print("deadcode: 0 findings")
+        else:
+            for f in findings:
+                level = "error" if f.removable else "warning"
+                msg = f"{f.category}: {f.name}"
+                if f.detail:
+                    msg += f" ({f.detail[:120]})"
+                console.print(f"::{level} file={f.file},line={f.line}::{msg}")
+            console.print(f"\n::notice::deadcode: {len(findings)} findings")
     else:
         # Summary
         console.print(f"\n[bold]DeadCode Scan[/bold] — {result.files_scanned} files scanned\n")
@@ -153,7 +182,7 @@ def scan(ctx: click.Context, json_output: bool, category: str | None, fail_thres
     # CI fail threshold
     effective_threshold = fail_threshold if fail_threshold is not None else _get_fail_threshold(ctx)
     if effective_threshold >= 0 and len(findings) >= effective_threshold:
-        if not json_output:
+        if effective_format not in ("json", "github"):
             console.print(f"\n[red]FAIL: {len(findings)} findings >= threshold {effective_threshold}[/red]")
         sys.exit(1)
 
@@ -175,13 +204,18 @@ def remove(ctx: click.Context, dry_run: bool, category: str | None) -> None:
     project = ctx.obj["project"]
     ignore = _merge_config_ignore(ctx)
 
+    if not Path(project).exists():
+        err_console.print(f"[red]Project directory '{project}' not found.[/red]")
+        sys.exit(1)
+
     if not dry_run:
         console.print("[red]WARNING: This will modify files. Use --dry-run first![/red]")
         console.print("[dim]Press Ctrl+C to abort. Running in 3 seconds...[/dim]")
         import time
         time.sleep(3)
 
-    scanner = DeadCodeScanner(project, ignore_patterns=ignore)
+    include_patterns = ctx.obj.get("include")
+    scanner = DeadCodeScanner(project, ignore_patterns=ignore, include_patterns=include_patterns)
     result = scanner.scan()
 
     findings = result.findings
@@ -246,11 +280,10 @@ def remove(ctx: click.Context, dry_run: bool, category: str | None) -> None:
 @click.pass_context
 def stats(ctx: click.Context) -> None:
     """Show quick stats about the project's dead code."""
-    if require_license:
-        require_license("deadcode")
     project = ctx.obj["project"]
     ignore = _merge_config_ignore(ctx)
-    scanner = DeadCodeScanner(project, ignore_patterns=ignore)
+    include_patterns = ctx.obj.get("include")
+    scanner = DeadCodeScanner(project, ignore_patterns=ignore, include_patterns=include_patterns)
     result = scanner.scan()
 
     console.print(f"Files scanned: [bold]{result.files_scanned}[/bold]")
