@@ -18,17 +18,30 @@ console = Console()
 err_console = Console(stderr=True)
 
 FORMAT_HELP = "Output format: pretty (default), compact, github, or json"
-ALL_CATEGORIES = ["unused_export", "dead_route", "orphaned_css", "unreferenced_component"]
+ALL_CATEGORIES = [
+    "unused_export",
+    "dead_route",
+    "orphaned_css",
+    "unreferenced_component",
+]
 FORMAT_CHOICES = click.Choice(["pretty", "compact", "github", "json"])
 
 
 @click.group()
 @click.option("--project", "-p", default=".", help="Project directory to scan")
-@click.option("--ignore", "-i", multiple=True, help="Additional ignore patterns (gitignore-style)")
-@click.option("--include", multiple=True, help="Include only matching files (gitignore-style whitelist)")
+@click.option(
+    "--ignore", "-i", multiple=True, help="Additional ignore patterns (gitignore-style)"
+)
+@click.option(
+    "--include",
+    multiple=True,
+    help="Include only matching files (gitignore-style whitelist)",
+)
 @click.version_option(__version__, prog_name="deadcode")
 @click.pass_context
-def cli(ctx: click.Context, project: str, ignore: tuple[str, ...], include: tuple[str, ...]) -> None:
+def cli(
+    ctx: click.Context, project: str, ignore: tuple[str, ...], include: tuple[str, ...]
+) -> None:
     """DeadCode — Find and remove dead code in TS/React/Next.js projects.
 
     Scans for unused exports, dead routes, orphaned CSS classes,
@@ -67,9 +80,17 @@ def _get_fail_threshold(ctx: click.Context) -> int:
 
 
 @cli.command()
-@click.option("--json-output", "-j", is_flag=True, help="Alias for --format=json (deprecated)")
+@click.option(
+    "--json-output", "-j", is_flag=True, help="Alias for --format=json (deprecated)"
+)
 @click.option("--format", type=FORMAT_CHOICES, default="pretty", help=FORMAT_HELP)
-@click.option("--category", "-c", type=click.Choice(ALL_CATEGORIES), default=None, help="Filter by category")
+@click.option(
+    "--category",
+    "-c",
+    type=click.Choice(ALL_CATEGORIES),
+    default=None,
+    help="Filter by category",
+)
 @click.option(
     "--fail",
     "fail_threshold",
@@ -94,7 +115,9 @@ def scan(
         sys.exit(1)
 
     include_patterns = ctx.obj.get("include")
-    scanner = DeadCodeScanner(project, ignore_patterns=ignore, include_patterns=include_patterns)
+    scanner = DeadCodeScanner(
+        project, ignore_patterns=ignore, include_patterns=include_patterns
+    )
     result = scanner.scan()
 
     # Filter by category
@@ -149,7 +172,9 @@ def scan(
             console.print(f"\n::notice::deadcode: {len(findings)} findings")
     else:
         # Summary
-        console.print(f"\n[bold]DeadCode Scan[/bold] — {result.files_scanned} files scanned\n")
+        console.print(
+            f"\n[bold]DeadCode Scan[/bold] — {result.files_scanned} files scanned\n"
+        )
 
         if not findings:
             console.print("[green]✓ No dead code found![/green]")
@@ -168,7 +193,9 @@ def scan(
 
             for cat, cat_findings in by_category.items():
                 label = category_labels.get(cat, cat)
-                console.print(f"\n[bold yellow]{label}[/bold yellow] ({len(cat_findings)})")
+                console.print(
+                    f"\n[bold yellow]{label}[/bold yellow] ({len(cat_findings)})"
+                )
 
                 table = Table(show_header=True)
                 table.add_column("File", style="cyan")
@@ -185,16 +212,24 @@ def scan(
 
             # Total
             removable = sum(1 for f in findings if f.removable)
-            console.print(f"\n[bold]Total:[/bold] {len(findings)} findings ({removable} removable)")
+            console.print(
+                f"\n[bold]Total:[/bold] {len(findings)} findings ({removable} removable)"
+            )
 
         if result.errors:
-            console.print(f"\n[yellow]{len(result.errors)} scan errors (use --json-output to see)[/yellow]")
+            console.print(
+                f"\n[yellow]{len(result.errors)} scan errors (use --json-output to see)[/yellow]"
+            )
 
     # CI fail threshold
-    effective_threshold = fail_threshold if fail_threshold is not None else _get_fail_threshold(ctx)
+    effective_threshold = (
+        fail_threshold if fail_threshold is not None else _get_fail_threshold(ctx)
+    )
     if effective_threshold >= 0 and len(findings) >= effective_threshold:
         if effective_format not in ("json", "github"):
-            console.print(f"\n[red]FAIL: {len(findings)} findings >= threshold {effective_threshold}[/red]")
+            console.print(
+                f"\n[red]FAIL: {len(findings)} findings >= threshold {effective_threshold}[/red]"
+            )
         sys.exit(1)
 
 
@@ -202,9 +237,17 @@ def scan(
 
 
 @cli.command()
-@click.option("--dry-run", is_flag=True, help="Preview what would be removed without making changes")
 @click.option(
-    "--category", "-c", type=click.Choice(ALL_CATEGORIES), default=None, help="Only remove findings in this category"
+    "--dry-run",
+    is_flag=True,
+    help="Preview what would be removed without making changes",
+)
+@click.option(
+    "--category",
+    "-c",
+    type=click.Choice(ALL_CATEGORIES),
+    default=None,
+    help="Only remove findings in this category",
 )
 @click.pass_context
 def remove(ctx: click.Context, dry_run: bool, category: str | None) -> None:
@@ -221,14 +264,18 @@ def remove(ctx: click.Context, dry_run: bool, category: str | None) -> None:
         sys.exit(1)
 
     if not dry_run:
-        console.print("[red]WARNING: This will modify files. Use --dry-run first![/red]")
+        console.print(
+            "[red]WARNING: This will modify files. Use --dry-run first![/red]"
+        )
         console.print("[dim]Press Ctrl+C to abort. Running in 3 seconds...[/dim]")
         import time
 
         time.sleep(3)
 
     include_patterns = ctx.obj.get("include")
-    scanner = DeadCodeScanner(project, ignore_patterns=ignore, include_patterns=include_patterns)
+    scanner = DeadCodeScanner(
+        project, ignore_patterns=ignore, include_patterns=include_patterns
+    )
     result = scanner.scan()
 
     findings = result.findings
@@ -261,7 +308,9 @@ def remove(ctx: click.Context, dry_run: bool, category: str | None) -> None:
             continue
 
         try:
-            lines = filepath.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
+            lines = filepath.read_text(encoding="utf-8", errors="replace").splitlines(
+                keepends=True
+            )
         except Exception as e:
             console.print(f"[red]Error reading {rel_file}: {e}[/red]")
             continue
@@ -272,7 +321,9 @@ def remove(ctx: click.Context, dry_run: bool, category: str | None) -> None:
         if dry_run:
             for line_num in sorted(lines_to_remove):
                 content = lines[line_num - 1].rstrip() if line_num <= len(lines) else ""
-                console.print(f"[yellow]WOULD REMOVE[/yellow] {rel_file}:{line_num} — {content.strip()[:80]}")
+                console.print(
+                    f"[yellow]WOULD REMOVE[/yellow] {rel_file}:{line_num} — {content.strip()[:80]}"
+                )
             removed_count += len(lines_to_remove)
         else:
             for line_num in lines_to_remove:
@@ -280,7 +331,9 @@ def remove(ctx: click.Context, dry_run: bool, category: str | None) -> None:
                     lines[line_num - 1] = ""  # Blank the line (safer than deleting)
             filepath.write_text("".join(lines), encoding="utf-8")
             removed_count += len(lines_to_remove)
-            console.print(f"[green]✓[/green] Cleaned {rel_file} ({len(lines_to_remove)} lines)")
+            console.print(
+                f"[green]✓[/green] Cleaned {rel_file} ({len(lines_to_remove)} lines)"
+            )
 
     action = "Would remove" if dry_run else "Removed"
     console.print(f"\n[bold]{action}: {removed_count} dead code entries[/bold]")
@@ -296,14 +349,22 @@ def stats(ctx: click.Context) -> None:
     project = ctx.obj["project"]
     ignore = _merge_config_ignore(ctx)
     include_patterns = ctx.obj.get("include")
-    scanner = DeadCodeScanner(project, ignore_patterns=ignore, include_patterns=include_patterns)
+    scanner = DeadCodeScanner(
+        project, ignore_patterns=ignore, include_patterns=include_patterns
+    )
     result = scanner.scan()
 
     console.print(f"Files scanned: [bold]{result.files_scanned}[/bold]")
-    console.print(f"Unused exports: [bold yellow]{len(result.unused_exports)}[/bold yellow]")
+    console.print(
+        f"Unused exports: [bold yellow]{len(result.unused_exports)}[/bold yellow]"
+    )
     console.print(f"Dead routes: [bold red]{len(result.dead_routes)}[/bold red]")
-    console.print(f"Orphaned CSS: [bold magenta]{len(result.orphaned_css)}[/bold magenta]")
-    console.print(f"Unreferenced components: [bold cyan]{len(result.unreferenced_components)}[/bold cyan]")
+    console.print(
+        f"Orphaned CSS: [bold magenta]{len(result.orphaned_css)}[/bold magenta]"
+    )
+    console.print(
+        f"Unreferenced components: [bold cyan]{len(result.unreferenced_components)}[/bold cyan]"
+    )
     console.print(f"Total findings: [bold]{len(result.findings)}[/bold]")
 
     if result.errors:
