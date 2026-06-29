@@ -18,9 +18,14 @@ class DeadCodeConfig:
     """Configuration loaded from .deadcode.yml."""
 
     ignore: list[str] = field(default_factory=list)
-    categories: list[str] = field(default_factory=lambda: [
-        "unused_export", "dead_route", "orphaned_css", "unreferenced_component",
-    ])
+    categories: list[str] = field(
+        default_factory=lambda: [
+            "unused_export",
+            "dead_route",
+            "orphaned_css",
+            "unreferenced_component",
+        ]
+    )
     fail_threshold: int = -1  # -1 means disabled
 
     @classmethod
@@ -28,9 +33,15 @@ class DeadCodeConfig:
         """Create config from a parsed dict."""
         return cls(
             ignore=data.get("ignore", []),
-            categories=data.get("categories", [
-                "unused_export", "dead_route", "orphaned_css", "unreferenced_component",
-            ]),
+            categories=data.get(
+                "categories",
+                [
+                    "unused_export",
+                    "dead_route",
+                    "orphaned_css",
+                    "unreferenced_component",
+                ],
+            ),
             fail_threshold=data.get("fail_threshold", -1),
         )
 
