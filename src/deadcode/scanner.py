@@ -124,9 +124,7 @@ class DeadCodeScanner:
         )
         self.include_spec = None
         if include_patterns:
-            self.include_spec = pathspec.PathSpec.from_lines(
-                "gitignore", include_patterns
-            )
+            self.include_spec = pathspec.PathSpec.from_lines("gitignore", include_patterns)
 
     @staticmethod
     def _default_ignore_patterns() -> list[str]:
@@ -223,15 +221,13 @@ class DeadCodeScanner:
 
             # Filter out ignored directories
             dirs[:] = [
-                d for d in dirs
-                if not self.ignore_spec.match_file(f"{rel_root}/{d}/" if rel_root != "." else f"{d}/")
+                d for d in dirs if not self.ignore_spec.match_file(f"{rel_root}/{d}/" if rel_root != "." else f"{d}/")
             ]
 
             # Filter out non-included directories when include_spec is set
             if self.include_spec:
                 dirs[:] = [
-                    d for d in dirs
-                    if self.include_spec.match_file(f"{rel_root}/{d}/" if rel_root != "." else f"{d}/")
+                    d for d in dirs if self.include_spec.match_file(f"{rel_root}/{d}/" if rel_root != "." else f"{d}/")
                 ]
 
             for fname in filenames:
@@ -250,18 +246,23 @@ class DeadCodeScanner:
     @staticmethod
     def _is_scannable_file(rel_path: str) -> bool:
         """Check if a file should be scanned."""
-        return rel_path.endswith((
-            ".ts", ".tsx", ".js", ".jsx",
-            ".css", ".scss", ".module.css",
-        ))
+        return rel_path.endswith(
+            (
+                ".ts",
+                ".tsx",
+                ".js",
+                ".jsx",
+                ".css",
+                ".scss",
+                ".module.css",
+            )
+        )
 
     @staticmethod
     def _is_css_file(rel_path: str) -> bool:
         return rel_path.endswith((".css", ".scss", ".module.css"))
 
-    def _parse_exports(
-        self, content: str, rel_path: str, exports: dict[str, list[tuple[str, int]]]
-    ) -> None:
+    def _parse_exports(self, content: str, rel_path: str, exports: dict[str, list[tuple[str, int]]]) -> None:
         """Extract export names from a file.
 
         Handles both single-line forms::
@@ -297,9 +298,7 @@ class DeadCodeScanner:
                 if name and re.match(r"^[A-Za-z_$][\w$]*$", name):
                     exports.setdefault(name, []).append((rel_path, line_num))
 
-    def _parse_imports(
-        self, content: str, rel_path: str, imports: dict[str, set[str]]
-    ) -> None:
+    def _parse_imports(self, content: str, rel_path: str, imports: dict[str, set[str]]) -> None:
         """Extract import names from a file."""
         for m in _IMPORT_PATTERN.finditer(content):
             # Named imports: import { Foo, Bar } from '...'
@@ -313,9 +312,7 @@ class DeadCodeScanner:
                 name = m.group(2)
                 imports.setdefault(name, set()).add(rel_path)
 
-    def _parse_css_classes(
-        self, content: str, rel_path: str, css_classes: dict[str, list[tuple[str, int]]]
-    ) -> None:
+    def _parse_css_classes(self, content: str, rel_path: str, css_classes: dict[str, list[tuple[str, int]]]) -> None:
         """Extract CSS class names defined in a stylesheet."""
         for i, line in enumerate(content.splitlines(), 1):
             for m in _CSS_CLASS_PATTERN.finditer(line):
@@ -330,9 +327,7 @@ class DeadCodeScanner:
                     for cls in group.split():
                         used_css_classes.add(cls)
 
-    def _parse_components(
-        self, content: str, rel_path: str, components: dict[str, str]
-    ) -> None:
+    def _parse_components(self, content: str, rel_path: str, components: dict[str, str]) -> None:
         """Extract React component definitions."""
         for m in _COMPONENT_PATTERN.finditer(content):
             name = m.group(1)
@@ -360,9 +355,21 @@ class DeadCodeScanner:
         """Find exports that are never imported elsewhere."""
         # Special names that are entry points or conventions
         skip_names = {
-            "default", "GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS",
-            "middleware", "config", "metadata", "generateMetadata",
-            "loader", "action", "generateStaticParams",
+            "default",
+            "GET",
+            "POST",
+            "PUT",
+            "DELETE",
+            "PATCH",
+            "HEAD",
+            "OPTIONS",
+            "middleware",
+            "config",
+            "metadata",
+            "generateMetadata",
+            "loader",
+            "action",
+            "generateStaticParams",
         }
 
         for name, locations in exports.items():
@@ -374,14 +381,16 @@ class DeadCodeScanner:
             external_importers = importers - exporter_files
             if not external_importers:
                 for file, line in locations:
-                    result.findings.append(Finding(
-                        file=file,
-                        line=line,
-                        name=name,
-                        category="unused_export",
-                        detail=f"Export '{name}' is never imported outside its defining file",
-                        removable=True,
-                    ))
+                    result.findings.append(
+                        Finding(
+                            file=file,
+                            line=line,
+                            name=name,
+                            category="unused_export",
+                            detail=f"Export '{name}' is never imported outside its defining file",
+                            removable=True,
+                        )
+                    )
 
     def _find_dead_routes(
         self,
@@ -420,14 +429,16 @@ class DeadCodeScanner:
                     # Dynamic routes are harder to prove dead — skip them
                     continue
 
-                result.findings.append(Finding(
-                    file=rel_path,
-                    line=1,
-                    name=route_path,
-                    category="dead_route",
-                    detail=f"Route '{route_path}' has no internal links pointing to it",
-                    removable=False,  # Routes may be linked externally
-                ))
+                result.findings.append(
+                    Finding(
+                        file=rel_path,
+                        line=1,
+                        name=route_path,
+                        category="dead_route",
+                        detail=f"Route '{route_path}' has no internal links pointing to it",
+                        removable=False,  # Routes may be linked externally
+                    )
+                )
 
     def _find_orphaned_css(
         self,
@@ -443,14 +454,16 @@ class DeadCodeScanner:
             if cls in used_css_classes:
                 continue
             for file, line in locations:
-                result.findings.append(Finding(
-                    file=file,
-                    line=line,
-                    name=cls,
-                    category="orphaned_css",
-                    detail=f"CSS class '.{cls}' is not used in any JSX className",
-                    removable=True,
-                ))
+                result.findings.append(
+                    Finding(
+                        file=file,
+                        line=line,
+                        name=cls,
+                        category="orphaned_css",
+                        detail=f"CSS class '.{cls}' is not used in any JSX className",
+                        removable=True,
+                    )
+                )
 
     def _find_unreferenced_components(
         self,
@@ -473,11 +486,13 @@ class DeadCodeScanner:
             if "/page." in file or "/route." in file or "/layout." in file:
                 continue
 
-            result.findings.append(Finding(
-                file=file,
-                line=1,
-                name=comp_name,
-                category="unreferenced_component",
-                detail=f"Component '{comp_name}' is never imported by other files",
-                removable=True,
-            ))
+            result.findings.append(
+                Finding(
+                    file=file,
+                    line=1,
+                    name=comp_name,
+                    category="unreferenced_component",
+                    detail=f"Component '{comp_name}' is never imported by other files",
+                    removable=True,
+                )
+            )

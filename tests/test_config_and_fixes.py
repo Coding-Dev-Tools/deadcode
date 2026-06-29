@@ -14,6 +14,7 @@ from deadcode.scanner import DeadCodeScanner
 @pytest.fixture
 def runner():
     from click.testing import CliRunner
+
     return CliRunner()
 
 
@@ -23,8 +24,8 @@ def sample_project(tmp_path):
     utils = tmp_path / "src" / "utils.ts"
     utils.parent.mkdir(parents=True, exist_ok=True)
     utils.write_text(
-        'export function usedHelper() { return 1; }\n'
-        'export function unusedHelper() { return 2; }\n'
+        "export function usedHelper() { return 1; }\n"
+        "export function unusedHelper() { return 2; }\n"
         'export const USED_CONST = "used";\n'
         'export const UNUSED_CONST = "unused";\n'
     )
@@ -33,45 +34,27 @@ def sample_project(tmp_path):
     button.parent.mkdir(parents=True, exist_ok=True)
     button.write_text(
         'import { usedHelper, USED_CONST } from "../utils";\n'
-        'export function Button() {\n'
+        "export function Button() {\n"
         '  return <button className="btn-primary">{usedHelper()}</button>;\n'
-        '}\n'
+        "}\n"
     )
 
     widget = tmp_path / "src" / "components" / "UnusedWidget.tsx"
-    widget.write_text(
-        'export function UnusedWidget() {\n'
-        '  return <div>Unused</div>;\n'
-        '}\n'
-    )
+    widget.write_text("export function UnusedWidget() {\n  return <div>Unused</div>;\n}\n")
 
     css = tmp_path / "src" / "styles" / "main.css"
     css.parent.mkdir(parents=True, exist_ok=True)
-    css.write_text(
-        '.btn-primary {\n'
-        '  background: blue;\n'
-        '}\n'
-        '.orphaned-class {\n'
-        '  color: red;\n'
-        '}\n'
-    )
+    css.write_text(".btn-primary {\n  background: blue;\n}\n.orphaned-class {\n  color: red;\n}\n")
 
     page = tmp_path / "src" / "app" / "page.tsx"
     page.parent.mkdir(parents=True, exist_ok=True)
     page.write_text(
-        'import { Button } from "../components/Button";\n'
-        'export default function Page() {\n'
-        '  return <Button />;\n'
-        '}\n'
+        'import { Button } from "../components/Button";\nexport default function Page() {\n  return <Button />;\n}\n'
     )
 
     deadpage = tmp_path / "src" / "app" / "deadpage" / "page.tsx"
     deadpage.parent.mkdir(parents=True, exist_ok=True)
-    deadpage.write_text(
-        'export default function DeadPage() {\n'
-        '  return <div>Dead</div>;\n'
-        '}\n'
-    )
+    deadpage.write_text("export default function DeadPage() {\n  return <div>Dead</div>;\n}\n")
 
     return tmp_path
 
@@ -99,12 +82,7 @@ class TestConfig:
     def test_load_from_yml(self, tmp_path):
         config_file = tmp_path / ".deadcode.yml"
         config_file.write_text(
-            'ignore:\n'
-            '  - "generated/"\n'
-            '  - "legacy/"\n'
-            'categories:\n'
-            '  - unused_export\n'
-            'fail_threshold: 3\n'
+            'ignore:\n  - "generated/"\n  - "legacy/"\ncategories:\n  - unused_export\nfail_threshold: 3\n'
         )
         config = DeadCodeConfig.load(tmp_path)
         assert config.ignore == ["generated/", "legacy/"]
@@ -164,10 +142,10 @@ class TestFailOption:
         # Create a project with dead code and a config
         utils = tmp_path / "src" / "mod.ts"
         utils.parent.mkdir(parents=True, exist_ok=True)
-        utils.write_text('export function unusedFunc() { return 1; }\n')
+        utils.write_text("export function unusedFunc() { return 1; }\n")
 
         config = tmp_path / ".deadcode.yml"
-        config.write_text('fail_threshold: 1\n')
+        config.write_text("fail_threshold: 1\n")
 
         result = runner.invoke(cli, ["-p", str(tmp_path), "scan"])
         assert result.exit_code == 1
@@ -178,7 +156,7 @@ class TestConfigIgnoreMerge:
         """Config file ignore patterns should be applied during scan."""
         mod = tmp_path / "src" / "mod.ts"
         mod.parent.mkdir(parents=True, exist_ok=True)
-        mod.write_text('export function unused() { return 1; }\n')
+        mod.write_text("export function unused() { return 1; }\n")
 
         config = tmp_path / ".deadcode.yml"
         config.write_text('ignore:\n  - "src/"\n')
@@ -193,7 +171,7 @@ class TestConfigIgnoreMerge:
         """CLI --ignore should be merged with config ignore."""
         mod = tmp_path / "src" / "mod.ts"
         mod.parent.mkdir(parents=True, exist_ok=True)
-        mod.write_text('export function unused() { return 1; }\n')
+        mod.write_text("export function unused() { return 1; }\n")
 
         # -i is a group-level option, must come before subcommand
         result = runner.invoke(cli, ["-p", str(tmp_path), "-i", "src/", "scan", "--json-output"])
@@ -205,7 +183,7 @@ class TestConfigIgnoreMerge:
         """Both config ignore AND CLI --ignore should merge together (covers cli.py:52 branch)."""
         mod = tmp_path / "src" / "mod.ts"
         mod.parent.mkdir(parents=True, exist_ok=True)
-        mod.write_text('export function unused() { return 1; }\n')
+        mod.write_text("export function unused() { return 1; }\n")
 
         config = tmp_path / ".deadcode.yml"
         config.write_text('ignore:\n  - "nonexistent/"\n')
@@ -215,8 +193,7 @@ class TestConfigIgnoreMerge:
         assert result.exit_code == 0
         data = json.loads(result.output, strict=False)
         # Both ignores combined should cover the .ts file
-        assert len(data["findings"]) == 0, \
-            f"Expected 0 findings with merged ignores, got {len(data['findings'])}"
+        assert len(data["findings"]) == 0, f"Expected 0 findings with merged ignores, got {len(data['findings'])}"
 
 
 class TestBugFixUnreferencedComponents:
@@ -224,14 +201,9 @@ class TestBugFixUnreferencedComponents:
         """Verify the bug fix: components that ARE imported should not be reported."""
         comp = tmp_path / "src" / "Button.tsx"
         comp.parent.mkdir(parents=True, exist_ok=True)
-        comp.write_text(
-            'export function Button() { return <div>Hi</div>; }\n'
-        )
+        comp.write_text("export function Button() { return <div>Hi</div>; }\n")
         app = tmp_path / "src" / "App.tsx"
-        app.write_text(
-            'import { Button } from "./Button";\n'
-            'export function App() { return <Button />; }\n'
-        )
+        app.write_text('import { Button } from "./Button";\nexport function App() { return <Button />; }\n')
 
         scanner = DeadCodeScanner(tmp_path)
         result = scanner.scan()
@@ -243,9 +215,7 @@ class TestBugFixUnreferencedComponents:
         """Component with zero imports should still be reported."""
         comp = tmp_path / "src" / "Orphan.tsx"
         comp.parent.mkdir(parents=True, exist_ok=True)
-        comp.write_text(
-            'export function Orphan() { return <div>Orphan</div>; }\n'
-        )
+        comp.write_text("export function Orphan() { return <div>Orphan</div>; }\n")
 
         scanner = DeadCodeScanner(tmp_path)
         result = scanner.scan()
@@ -262,6 +232,7 @@ class TestLicenseDepRemoved:
         import inspect
 
         import deadcode.cli as cli_mod
+
         source = inspect.getsource(cli_mod)
         assert "revenueholdings_license" not in source
         assert "require_license" not in source
@@ -269,6 +240,7 @@ class TestLicenseDepRemoved:
     def test_no_license_optional_dep(self):
         """pyproject.toml should not have license optional dep."""
         from pathlib import Path
+
         pyproject = Path(__file__).parent.parent / "pyproject.toml"
         content = pyproject.read_text()
         assert "revenueholdings-license" not in content
@@ -286,6 +258,7 @@ class TestLicenseDepRemoved:
         result = runner.invoke(cli, ["-p", str(sample_project), "remove", "--dry-run"])
         assert result.exit_code == 0
 
+
 class TestIncludeCLI:
     """Tests for the --include CLI option (whitelist)."""
 
@@ -293,11 +266,11 @@ class TestIncludeCLI:
         """--include should limit scan to matching directories."""
         mod = tmp_path / "src" / "mod.ts"
         mod.parent.mkdir(parents=True, exist_ok=True)
-        mod.write_text('export function unusedInSrc() { return 1; }\n')
+        mod.write_text("export function unusedInSrc() { return 1; }\n")
 
         lib = tmp_path / "lib" / "helper.ts"
         lib.parent.mkdir(parents=True, exist_ok=True)
-        lib.write_text('export function unusedInLib() { return 2; }\n')
+        lib.write_text("export function unusedInLib() { return 2; }\n")
 
         result = runner.invoke(cli, ["-p", str(tmp_path), "--include", "src/", "scan", "--json-output"])
         assert result.exit_code == 0
@@ -310,14 +283,15 @@ class TestIncludeCLI:
         """Multiple --include flags should scan all matching dirs."""
         mod = tmp_path / "src" / "mod.ts"
         mod.parent.mkdir(parents=True, exist_ok=True)
-        mod.write_text('export function foo() { return 1; }\n')
+        mod.write_text("export function foo() { return 1; }\n")
 
         lib = tmp_path / "lib" / "helper.ts"
         lib.parent.mkdir(parents=True, exist_ok=True)
-        lib.write_text('export function bar() { return 2; }\n')
+        lib.write_text("export function bar() { return 2; }\n")
 
         result = runner.invoke(
-            cli, ["-p", str(tmp_path), "--include", "src/", "--include", "lib/", "scan", "--json-output"],
+            cli,
+            ["-p", str(tmp_path), "--include", "src/", "--include", "lib/", "scan", "--json-output"],
         )
         assert result.exit_code == 0
         data = json.loads(result.output, strict=False)
@@ -327,11 +301,11 @@ class TestIncludeCLI:
         """--include should also work with stats command."""
         mod = tmp_path / "src" / "mod.ts"
         mod.parent.mkdir(parents=True, exist_ok=True)
-        mod.write_text('export function foo() { return 1; }\n')
+        mod.write_text("export function foo() { return 1; }\n")
 
         lib = tmp_path / "lib" / "helper.ts"
         lib.parent.mkdir(parents=True, exist_ok=True)
-        lib.write_text('export function bar() { return 2; }\n')
+        lib.write_text("export function bar() { return 2; }\n")
 
         result = runner.invoke(cli, ["-p", str(tmp_path), "--include", "src/", "stats"])
         assert result.exit_code == 0
@@ -341,11 +315,11 @@ class TestIncludeCLI:
         """--include should also work with remove --dry-run."""
         mod = tmp_path / "src" / "mod.ts"
         mod.parent.mkdir(parents=True, exist_ok=True)
-        mod.write_text('export function foo() { return 1; }\n')
+        mod.write_text("export function foo() { return 1; }\n")
 
         lib = tmp_path / "lib" / "helper.ts"
         lib.parent.mkdir(parents=True, exist_ok=True)
-        lib.write_text('export function bar() { return 2; }\n')
+        lib.write_text("export function bar() { return 2; }\n")
 
         result = runner.invoke(cli, ["-p", str(tmp_path), "--include", "src/", "remove", "--dry-run"])
 
@@ -355,14 +329,15 @@ class TestIncludeCLI:
         """--include and --ignore should work together (include first, then ignore)."""
         mod = tmp_path / "src" / "mod.ts"
         mod.parent.mkdir(parents=True, exist_ok=True)
-        mod.write_text('export function foo() { return 1; }\n')
+        mod.write_text("export function foo() { return 1; }\n")
 
         internal = tmp_path / "src" / "internal" / "helper.ts"
         internal.parent.mkdir(parents=True, exist_ok=True)
-        internal.write_text('export function bar() { return 2; }\n')
+        internal.write_text("export function bar() { return 2; }\n")
 
         result = runner.invoke(
-            cli, ["-p", str(tmp_path), "--include", "src/", "-i", "src/internal/", "scan", "--json-output"],
+            cli,
+            ["-p", str(tmp_path), "--include", "src/", "-i", "src/internal/", "scan", "--json-output"],
         )
         assert result.exit_code == 0
         data = json.loads(result.output, strict=False)
@@ -375,7 +350,7 @@ class TestIncludeCLI:
         """--include matching nothing should yield 0 files scanned."""
         mod = tmp_path / "src" / "mod.ts"
         mod.parent.mkdir(parents=True, exist_ok=True)
-        mod.write_text('export function foo() { return 1; }\n')
+        mod.write_text("export function foo() { return 1; }\n")
 
         result = runner.invoke(cli, ["-p", str(tmp_path), "--include", "nonexistent/", "scan", "--json-output"])
         assert result.exit_code == 0
@@ -386,7 +361,7 @@ class TestIncludeCLI:
         """--include should handle invalid gitignore patterns without crashing."""
         mod = tmp_path / "src" / "mod.ts"
         mod.parent.mkdir(parents=True, exist_ok=True)
-        mod.write_text('export function foo() { return 1; }\n')
+        mod.write_text("export function foo() { return 1; }\n")
 
         result = runner.invoke(cli, ["-p", str(tmp_path), "--include", "src/[invalid", "scan"])
         assert result.exit_code in (0, 2), "should not crash, may produce error or proceed"
@@ -398,22 +373,19 @@ class TestRemoveNonDryRun:
     @pytest.fixture(autouse=True)
     def _runner(self):
         from click.testing import CliRunner
+
         self._r = CliRunner()
 
     def test_remove_actually_blanks_lines(self, tmp_path):
         """remove without --dry-run should blank the flagged lines in the file."""
         mod = tmp_path / "src" / "mod.ts"
         mod.parent.mkdir(parents=True, exist_ok=True)
-        mod.write_text(
-            'export function unusedA() { return 1; }\n'
-            'export function unusedB() { return 2; }\n'
-        )
+        mod.write_text("export function unusedA() { return 1; }\nexport function unusedB() { return 2; }\n")
 
         import unittest.mock
+
         with unittest.mock.patch("time.sleep"):
-            result = self._r.invoke(
-                cli, ["-p", str(tmp_path), "remove", "-c", "unused_export"]
-            )
+            result = self._r.invoke(cli, ["-p", str(tmp_path), "remove", "-c", "unused_export"])
         assert result.exit_code == 0
 
         content = mod.read_text()
@@ -423,18 +395,14 @@ class TestRemoveNonDryRun:
         """remove should not blank lines for exports that are imported elsewhere."""
         mod = tmp_path / "src" / "mod.ts"
         mod.parent.mkdir(parents=True, exist_ok=True)
-        mod.write_text(
-            'export function usedFunc() { return 1; }\n'
-            'export function unusedFunc() { return 2; }\n'
-        )
+        mod.write_text("export function usedFunc() { return 1; }\nexport function unusedFunc() { return 2; }\n")
         app = tmp_path / "src" / "app.ts"
         app.write_text('import { usedFunc } from "./mod";\nusedFunc();\n')
 
         import unittest.mock
+
         with unittest.mock.patch("time.sleep"):
-            result = self._r.invoke(
-                cli, ["-p", str(tmp_path), "remove", "-c", "unused_export"]
-            )
+            result = self._r.invoke(cli, ["-p", str(tmp_path), "remove", "-c", "unused_export"])
         assert result.exit_code == 0
 
         content = mod.read_text()
@@ -450,12 +418,10 @@ class TestRemoveNonDryRun:
         # component in a page file (excluded by /page. check).
         page = tmp_path / "app" / "page.tsx"
         page.parent.mkdir(parents=True, exist_ok=True)
-        page.write_text(
-            'export function Home() { return <a href="/about">About</a>; }\n'
-        )
+        page.write_text('export function Home() { return <a href="/about">About</a>; }\n')
         about = tmp_path / "app" / "about" / "page.tsx"
         about.parent.mkdir(parents=True, exist_ok=True)
-        about.write_text('export default function About() { return <div>About</div>; }\n')
+        about.write_text("export default function About() { return <div>About</div>; }\n")
 
         result = self._r.invoke(cli, ["-p", str(tmp_path), "remove", "--dry-run"])
         assert result.exit_code == 0
@@ -470,12 +436,14 @@ class TestRemoveNonDryRun:
         """remove should skip files that disappeared after scan (covers cli.py:248 path)."""
         mod = tmp_path / "src" / "mod.ts"
         mod.parent.mkdir(parents=True, exist_ok=True)
-        mod.write_text('export function unusedFunc() { return 1; }\n')
+        mod.write_text("export function unusedFunc() { return 1; }\n")
 
         from click.testing import CliRunner
+
         runner = CliRunner()
 
         import json
+
         scan_result = runner.invoke(cli, ["-p", str(tmp_path), "scan", "--json-output"])
         assert scan_result.exit_code == 0
         data = json.loads(scan_result.output, strict=False)
@@ -537,8 +505,9 @@ class TestPackagingQuality:
             data = tomllib.load(f)
         pkg_data = data.get("tool", {}).get("setuptools", {}).get("package-data", {})
         assert "deadcode" in pkg_data, "Expected [tool.setuptools.package-data] section for 'deadcode'"
-        assert "py.typed" in pkg_data["deadcode"], \
+        assert "py.typed" in pkg_data["deadcode"], (
             f"Expected 'py.typed' in package-data for deadcode, got {pkg_data['deadcode']}"
+        )
 
 
 class TestScannerEdgeCases:
@@ -548,7 +517,7 @@ class TestScannerEdgeCases:
         """Dynamic routes (with [param]) should not be flagged as dead."""
         page = tmp_path / "app" / "users" / "[id]" / "page.tsx"
         page.parent.mkdir(parents=True, exist_ok=True)
-        page.write_text('export default function UserProfile() { return <div>Profile</div>; }\n')
+        page.write_text("export default function UserProfile() { return <div>Profile</div>; }\n")
 
         scanner = DeadCodeScanner(tmp_path)
         result = scanner.scan()
@@ -561,7 +530,7 @@ class TestScannerEdgeCases:
         """Components in page.tsx files should not be reported as unreferenced."""
         page = tmp_path / "app" / "page.tsx"
         page.parent.mkdir(parents=True, exist_ok=True)
-        page.write_text('export function HomePage() { return <div>Home</div>; }\n')
+        page.write_text("export function HomePage() { return <div>Home</div>; }\n")
 
         scanner = DeadCodeScanner(tmp_path)
         result = scanner.scan()
@@ -573,7 +542,7 @@ class TestScannerEdgeCases:
         """Components in layout.tsx files should not be reported as unreferenced."""
         layout = tmp_path / "app" / "layout.tsx"
         layout.parent.mkdir(parents=True, exist_ok=True)
-        layout.write_text('export function RootLayout() { return <div>Layout</div>; }\n')
+        layout.write_text("export function RootLayout() { return <div>Layout</div>; }\n")
 
         scanner = DeadCodeScanner(tmp_path)
         result = scanner.scan()
@@ -586,8 +555,8 @@ class TestScannerEdgeCases:
         handler = tmp_path / "api" / "route.ts"
         handler.parent.mkdir(parents=True, exist_ok=True)
         handler.write_text(
-            'export function GET() { return Response.json({}); }\n'
-            'export function POST() { return Response.json({}); }\n'
+            "export function GET() { return Response.json({}); }\n"
+            "export function POST() { return Response.json({}); }\n"
             'export const config = { runtime: "edge" };\n'
         )
 
@@ -603,9 +572,7 @@ class TestScannerEdgeCases:
         """CSS classes with utility prefixes (hover:, focus:, etc.) should be skipped."""
         css = tmp_path / "styles.css"
         css.write_text(
-            '.hover:bg-red { color: red; }\n'
-            '.focus:ring { outline: none; }\n'
-            '.normal-class { color: blue; }\n'
+            ".hover:bg-red { color: red; }\n.focus:ring { outline: none; }\n.normal-class { color: blue; }\n"
         )
         # No JSX using any of these
 
@@ -614,10 +581,8 @@ class TestScannerEdgeCases:
 
         orphaned = {f.name for f in result.orphaned_css}
         # Utility-prefixed classes should be skipped (starts with hover:, focus:)
-        assert "hover:bg-red" not in orphaned, \
-            "hover:bg-red should be skipped by utility prefix check"
-        assert "focus:ring" not in orphaned, \
-            "focus:ring should be skipped by utility prefix check"
+        assert "hover:bg-red" not in orphaned, "hover:bg-red should be skipped by utility prefix check"
+        assert "focus:ring" not in orphaned, "focus:ring should be skipped by utility prefix check"
         # Normal class without a utility prefix IS orphaned
         assert "normal-class" in orphaned
         # Verify the full utility class names are captured (not truncated at colon)
@@ -627,21 +592,21 @@ class TestScannerEdgeCases:
                 css_classes.add(finding.name)
         # If hover:bg-red or focus:ring appear as orphaned (before skip), that's expected
         # Names like 'hover' or 'focus' alone should NOT appear (regression check)
-        assert "hover" not in orphaned, \
-            "hover should not appear alone — it's part of hover:bg-red"
-        assert "focus" not in orphaned, \
-            "focus should not appear alone — it's part of focus:ring"
+        assert "hover" not in orphaned, "hover should not appear alone — it's part of hover:bg-red"
+        assert "focus" not in orphaned, "focus should not appear alone — it's part of focus:ring"
 
     def test_scan_read_error_recorded(self, tmp_path):
         """Scanner should record errors for files it can't read."""
         import unittest.mock
         from pathlib import Path as PathLib
+
         mod = tmp_path / "src" / "mod.ts"
         mod.parent.mkdir(parents=True, exist_ok=True)
-        mod.write_text('export function foo() { return 1; }\n')
+        mod.write_text("export function foo() { return 1; }\n")
 
         scanner = DeadCodeScanner(tmp_path)
         original_read_text = PathLib.read_text
+
         def _failing_read_text(self_path, *args, **kwargs):
             if "mod.ts" in str(self_path):
                 raise PermissionError("denied")
@@ -657,7 +622,7 @@ class TestScannerEdgeCases:
         """Default imports (import Foo from) should be parsed (covers scanner.py:290-292)."""
         mod = tmp_path / "src" / "helper.ts"
         mod.parent.mkdir(parents=True, exist_ok=True)
-        mod.write_text('export function helper() { return 1; }\n')
+        mod.write_text("export function helper() { return 1; }\n")
 
         consumer = tmp_path / "src" / "consumer.ts"
         consumer.write_text('import helper from "./helper";\nhelper();\n')
@@ -666,18 +631,17 @@ class TestScannerEdgeCases:
         result = scanner.scan()
 
         unused_names = {f.name for f in result.unused_exports}
-        assert "helper" not in unused_names, \
-            "helper should be recognized as imported via default import"
+        assert "helper" not in unused_names, "helper should be recognized as imported via default import"
 
     def test_scan_collect_files_with_ignore(self, tmp_path):
         """Scanner._collect_files handles ignore_spec correctly (covers scanner.py:238-241)."""
         mod = tmp_path / "src" / "mod.ts"
         mod.parent.mkdir(parents=True, exist_ok=True)
-        mod.write_text('export function foo() { return 1; }\n')
+        mod.write_text("export function foo() { return 1; }\n")
 
         internal = tmp_path / "src" / "internal" / "helper.ts"
         internal.parent.mkdir(parents=True, exist_ok=True)
-        internal.write_text('export function bar() { return 2; }\n')
+        internal.write_text("export function bar() { return 2; }\n")
 
         scanner = DeadCodeScanner(tmp_path, ignore_patterns=["src/internal/"])
         result = scanner.scan()

@@ -15,6 +15,7 @@ class TestMainModule:
     @pytest.fixture
     def runner(self):
         from click.testing import CliRunner
+
         return CliRunner()
 
     def test_main_module_runs_help(self, runner):
@@ -30,6 +31,7 @@ class TestCliEdgeCases:
     @pytest.fixture
     def runner(self):
         from click.testing import CliRunner
+
         return CliRunner()
 
     def test_non_existent_project_exits_1(self, runner):
@@ -62,6 +64,7 @@ class TestCliFormatOutput:
     @pytest.fixture
     def runner(self):
         from click.testing import CliRunner
+
         return CliRunner()
 
     @pytest.fixture
@@ -69,10 +72,7 @@ class TestCliFormatOutput:
         """A tiny TS project with at least one dead export."""
         mod = tmp_path / "src" / "mod.ts"
         mod.parent.mkdir(parents=True, exist_ok=True)
-        mod.write_text(
-            'export function usedHelper() { return 1; }\n'
-            'export function unusedHelper() { return 2; }\n'
-        )
+        mod.write_text("export function usedHelper() { return 1; }\nexport function unusedHelper() { return 2; }\n")
         return tmp_path
 
     def test_format_compact_output(self, runner, sample):
@@ -113,6 +113,7 @@ class TestRemoveCommand:
     @pytest.fixture
     def runner(self):
         from click.testing import CliRunner
+
         return CliRunner()
 
     def test_remove_dry_run_nothing_removable(self, runner, tmp_path):
@@ -130,14 +131,13 @@ class TestStatsCommand:
     @pytest.fixture
     def runner(self):
         from click.testing import CliRunner
+
         return CliRunner()
 
     def test_stats_basic(self, runner, tmp_path):
         """stats command shows scan summary."""
         (tmp_path / "src" / "unused.ts").parent.mkdir(parents=True, exist_ok=True)
-        (tmp_path / "src" / "unused.ts").write_text(
-            "export function unusedHelper() { return 1; }\n"
-        )
+        (tmp_path / "src" / "unused.ts").write_text("export function unusedHelper() { return 1; }\n")
         result = runner.invoke(cli, ["-p", str(tmp_path), "stats"])
         assert result.exit_code == 0
         assert "Files scanned" in result.output

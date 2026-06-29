@@ -70,8 +70,13 @@ def _get_fail_threshold(ctx: click.Context) -> int:
 @click.option("--json-output", "-j", is_flag=True, help="Alias for --format=json (deprecated)")
 @click.option("--format", type=FORMAT_CHOICES, default="pretty", help=FORMAT_HELP)
 @click.option("--category", "-c", type=click.Choice(ALL_CATEGORIES), default=None, help="Filter by category")
-@click.option("--fail", "fail_threshold", type=int, default=None,
-              help="Exit code 1 if findings >= threshold (overrides .deadcode.yml)")
+@click.option(
+    "--fail",
+    "fail_threshold",
+    type=int,
+    default=None,
+    help="Exit code 1 if findings >= threshold (overrides .deadcode.yml)",
+)
 @click.pass_context
 def scan(
     ctx: click.Context,
@@ -109,8 +114,14 @@ def scan(
         output = {
             "files_scanned": result.files_scanned,
             "findings": [
-                {"file": f.file, "line": f.line, "name": f.name,
-                 "category": f.category, "detail": f.detail, "removable": f.removable}
+                {
+                    "file": f.file,
+                    "line": f.line,
+                    "name": f.name,
+                    "category": f.category,
+                    "detail": f.detail,
+                    "removable": f.removable,
+                }
                 for f in findings
             ],
             "errors": result.errors,
@@ -192,8 +203,9 @@ def scan(
 
 @cli.command()
 @click.option("--dry-run", is_flag=True, help="Preview what would be removed without making changes")
-@click.option("--category", "-c", type=click.Choice(ALL_CATEGORIES),
-              default=None, help="Only remove findings in this category")
+@click.option(
+    "--category", "-c", type=click.Choice(ALL_CATEGORIES), default=None, help="Only remove findings in this category"
+)
 @click.pass_context
 def remove(ctx: click.Context, dry_run: bool, category: str | None) -> None:
     """Remove dead code (with --dry-run for preview).
@@ -212,6 +224,7 @@ def remove(ctx: click.Context, dry_run: bool, category: str | None) -> None:
         console.print("[red]WARNING: This will modify files. Use --dry-run first![/red]")
         console.print("[dim]Press Ctrl+C to abort. Running in 3 seconds...[/dim]")
         import time
+
         time.sleep(3)
 
     include_patterns = ctx.obj.get("include")

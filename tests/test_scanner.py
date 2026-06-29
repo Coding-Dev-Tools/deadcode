@@ -14,6 +14,7 @@ from deadcode.scanner import DeadCodeScanner
 @pytest.fixture
 def runner():
     from click.testing import CliRunner
+
     return CliRunner()
 
 
@@ -24,8 +25,8 @@ def sample_project(tmp_path):
     utils = tmp_path / "src" / "utils.ts"
     utils.parent.mkdir(parents=True, exist_ok=True)
     utils.write_text(
-        'export function usedHelper() { return 1; }\n'
-        'export function unusedHelper() { return 2; }\n'
+        "export function usedHelper() { return 1; }\n"
+        "export function unusedHelper() { return 2; }\n"
         'export const USED_CONST = "used";\n'
         'export const UNUSED_CONST = "unused";\n'
     )
@@ -35,49 +36,31 @@ def sample_project(tmp_path):
     button.parent.mkdir(parents=True, exist_ok=True)
     button.write_text(
         'import { usedHelper, USED_CONST } from "../utils";\n'
-        'export function Button() {\n'
+        "export function Button() {\n"
         '  return <button className="btn-primary">{usedHelper()}</button>;\n'
-        '}\n'
+        "}\n"
     )
 
     # src/components/UnusedWidget.tsx - never imported
     widget = tmp_path / "src" / "components" / "UnusedWidget.tsx"
-    widget.write_text(
-        'export function UnusedWidget() {\n'
-        '  return <div>Unused</div>;\n'
-        '}\n'
-    )
+    widget.write_text("export function UnusedWidget() {\n  return <div>Unused</div>;\n}\n")
 
     # src/styles/main.css - with orphaned class
     css = tmp_path / "src" / "styles" / "main.css"
     css.parent.mkdir(parents=True, exist_ok=True)
-    css.write_text(
-        '.btn-primary {\n'
-        '  background: blue;\n'
-        '}\n'
-        '.orphaned-class {\n'
-        '  color: red;\n'
-        '}\n'
-    )
+    css.write_text(".btn-primary {\n  background: blue;\n}\n.orphaned-class {\n  color: red;\n}\n")
 
     # src/app/page.tsx - Next.js page (entry point)
     page = tmp_path / "src" / "app" / "page.tsx"
     page.parent.mkdir(parents=True, exist_ok=True)
     page.write_text(
-        'import { Button } from "../components/Button";\n'
-        'export default function Page() {\n'
-        '  return <Button />;\n'
-        '}\n'
+        'import { Button } from "../components/Button";\nexport default function Page() {\n  return <Button />;\n}\n'
     )
 
     # src/app/deadpage/page.tsx - dead route
     deadpage = tmp_path / "src" / "app" / "deadpage" / "page.tsx"
     deadpage.parent.mkdir(parents=True, exist_ok=True)
-    deadpage.write_text(
-        'export default function DeadPage() {\n'
-        '  return <div>Dead</div>;\n'
-        '}\n'
-    )
+    deadpage.write_text("export default function DeadPage() {\n  return <div>Dead</div>;\n}\n")
 
     return tmp_path
 
@@ -145,10 +128,7 @@ class TestExportParsing:
     def test_named_exports(self, tmp_path):
         f = tmp_path / "test.ts"
         f.write_text(
-            'export function foo() {}\n'
-            'export const bar = 1;\n'
-            'export type Baz = string;\n'
-            'export interface Qux {}\n'
+            "export function foo() {}\nexport const bar = 1;\nexport type Baz = string;\nexport interface Qux {}\n"
         )
         scanner = DeadCodeScanner(tmp_path)
         result = scanner.scan()
@@ -161,11 +141,7 @@ class TestExportParsing:
 
     def test_export_list(self, tmp_path):
         f = tmp_path / "test.ts"
-        f.write_text(
-            'const alpha = 1;\n'
-            'const beta = 2;\n'
-            'export { alpha, beta };\n'
-        )
+        f.write_text("const alpha = 1;\nconst beta = 2;\nexport { alpha, beta };\n")
         scanner = DeadCodeScanner(tmp_path)
         result = scanner.scan()
 
@@ -175,7 +151,7 @@ class TestExportParsing:
 
     def test_used_exports_not_reported(self, tmp_path):
         mod = tmp_path / "mod.ts"
-        mod.write_text('export function myFunc() { return 1; }\n')
+        mod.write_text("export function myFunc() { return 1; }\n")
         app = tmp_path / "app.ts"
         app.write_text('import { myFunc } from "./mod";\nmyFunc();\n')
 
@@ -189,16 +165,9 @@ class TestExportParsing:
 class TestCSSParsing:
     def test_orphaned_css_detection(self, tmp_path):
         css = tmp_path / "styles.css"
-        css.write_text(
-            '.used-class { color: blue; }\n'
-            '.orphaned-class { color: red; }\n'
-        )
+        css.write_text(".used-class { color: blue; }\n.orphaned-class { color: red; }\n")
         component = tmp_path / "Component.tsx"
-        component.write_text(
-            'export function Component() {\n'
-            '  return <div className="used-class">Hi</div>;\n'
-            '}\n'
-        )
+        component.write_text('export function Component() {\n  return <div className="used-class">Hi</div>;\n}\n')
 
         scanner = DeadCodeScanner(tmp_path)
         result = scanner.scan()
@@ -212,7 +181,7 @@ class TestRouteDetection:
     def test_nextjs_app_router_route(self, tmp_path):
         page = tmp_path / "app" / "about" / "page.tsx"
         page.parent.mkdir(parents=True, exist_ok=True)
-        page.write_text('export default function About() { return <div>About</div>; }\n')
+        page.write_text("export default function About() { return <div>About</div>; }\n")
 
         scanner = DeadCodeScanner(tmp_path)
         result = scanner.scan()
@@ -223,7 +192,7 @@ class TestRouteDetection:
     def test_root_route_not_dead(self, tmp_path):
         page = tmp_path / "app" / "page.tsx"
         page.parent.mkdir(parents=True, exist_ok=True)
-        page.write_text('export default function Home() { return <div>Home</div>; }\n')
+        page.write_text("export default function Home() { return <div>Home</div>; }\n")
 
         scanner = DeadCodeScanner(tmp_path)
         result = scanner.scan()
@@ -235,12 +204,10 @@ class TestRouteDetection:
     def test_linked_route_not_dead(self, tmp_path):
         page = tmp_path / "app" / "page.tsx"
         page.parent.mkdir(parents=True, exist_ok=True)
-        page.write_text(
-            'export default function Home() { return <a href="/about">About</a>; }\n'
-        )
+        page.write_text('export default function Home() { return <a href="/about">About</a>; }\n')
         about = tmp_path / "app" / "about" / "page.tsx"
         about.parent.mkdir(parents=True, exist_ok=True)
-        about.write_text('export default function About() { return <div>About</div>; }\n')
+        about.write_text("export default function About() { return <div>About</div>; }\n")
 
         scanner = DeadCodeScanner(tmp_path)
         result = scanner.scan()
@@ -299,11 +266,12 @@ class TestCLIIntegration:
         """--ignore option should exclude matching files from scan."""
         mod = tmp_path / "src" / "mod.ts"
         mod.parent.mkdir(parents=True, exist_ok=True)
-        mod.write_text('export function unusedFunc() { return 1; }\n')
+        mod.write_text("export function unusedFunc() { return 1; }\n")
 
         result = runner.invoke(cli, ["-p", str(tmp_path), "-i", "src/", "scan", "--json-output"])
         assert result.exit_code == 0
         import json
+
         data = json.loads(result.output, strict=False)
         assert data["files_scanned"] == 0, "src/ ignored, should have 0 files"
 
@@ -331,9 +299,11 @@ class TestCLIIntegration:
         """Test that python -m deadcode works (__main__ entry point fix)."""
         import subprocess
         import sys
+
         result = subprocess.run(
             [sys.executable, "-m", "deadcode", "--help"],
-            capture_output=True, text=True,
+            capture_output=True,
+            text=True,
             cwd=str(Path(__file__).parent.parent / "src"),
         )
         assert result.returncode == 0
@@ -351,12 +321,7 @@ class TestMultiLineExportList:
         mod = tmp_path / "src" / "mod.ts"
         mod.parent.mkdir(parents=True, exist_ok=True)
         mod.write_text(
-            "function Alpha() { return 1; }\n"
-            "function Beta() { return 2; }\n"
-            "export {\n"
-            "  Alpha,\n"
-            "  Beta,\n"
-            "}\n"
+            "function Alpha() { return 1; }\nfunction Beta() { return 2; }\nexport {\n  Alpha,\n  Beta,\n}\n"
         )
 
         scanner = DeadCodeScanner(tmp_path)
@@ -392,12 +357,7 @@ class TestMultiLineExportList:
         """export { Foo as Bar } aliases: the local name Foo should be tracked, not the alias."""
         mod = tmp_path / "src" / "mod.ts"
         mod.parent.mkdir(parents=True, exist_ok=True)
-        mod.write_text(
-            "function InternalName() { return 1; }\n"
-            "export {\n"
-            "  InternalName as PublicName,\n"
-            "}\n"
-        )
+        mod.write_text("function InternalName() { return 1; }\nexport {\n  InternalName as PublicName,\n}\n")
 
         scanner = DeadCodeScanner(tmp_path)
         result = scanner.scan()
@@ -412,11 +372,7 @@ class TestMultiLineExportList:
         """Single-line export { Foo, Bar } should continue to work after the fix."""
         mod = tmp_path / "src" / "mod.ts"
         mod.parent.mkdir(parents=True, exist_ok=True)
-        mod.write_text(
-            "const alpha = 1;\n"
-            "const beta = 2;\n"
-            "export { alpha, beta };\n"
-        )
+        mod.write_text("const alpha = 1;\nconst beta = 2;\nexport { alpha, beta };\n")
 
         scanner = DeadCodeScanner(tmp_path)
         result = scanner.scan()
@@ -454,11 +410,11 @@ class TestIncludePatterns:
         # Create files in two dirs
         mod = tmp_path / "src" / "mod.ts"
         mod.parent.mkdir(parents=True, exist_ok=True)
-        mod.write_text('export function foo() { return 1; }\\n')
+        mod.write_text("export function foo() { return 1; }\\n")
 
         lib = tmp_path / "lib" / "helper.ts"
         lib.parent.mkdir(parents=True, exist_ok=True)
-        lib.write_text('export function bar() { return 2; }\\n')
+        lib.write_text("export function bar() { return 2; }\\n")
 
         scanner = DeadCodeScanner(tmp_path, include_patterns=["src/"])
         result = scanner.scan()
@@ -470,11 +426,11 @@ class TestIncludePatterns:
         """include_patterns can specify multiple directories."""
         mod = tmp_path / "src" / "mod.ts"
         mod.parent.mkdir(parents=True, exist_ok=True)
-        mod.write_text('export function foo() { return 1; }\\n')
+        mod.write_text("export function foo() { return 1; }\\n")
 
         lib = tmp_path / "lib" / "helper.ts"
         lib.parent.mkdir(parents=True, exist_ok=True)
-        lib.write_text('export function bar() { return 2; }\\n')
+        lib.write_text("export function bar() { return 2; }\\n")
 
         scanner = DeadCodeScanner(tmp_path, include_patterns=["src/", "lib/"])
         result = scanner.scan()
@@ -484,15 +440,16 @@ class TestIncludePatterns:
         """When include_patterns is None, all scannable files are included."""
         mod = tmp_path / "src" / "mod.ts"
         mod.parent.mkdir(parents=True, exist_ok=True)
-        mod.write_text('export function foo() { return 1; }\\n')
+        mod.write_text("export function foo() { return 1; }\\n")
 
         lib = tmp_path / "lib" / "helper.ts"
         lib.parent.mkdir(parents=True, exist_ok=True)
-        lib.write_text('export function bar() { return 2; }\\n')
+        lib.write_text("export function bar() { return 2; }\\n")
 
         scanner = DeadCodeScanner(tmp_path)
         result = scanner.scan()
         assert result.files_scanned == 2
+
 
 class TestScanFormat:
     """Tests for the new --format scan option."""
