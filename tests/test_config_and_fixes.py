@@ -53,7 +53,10 @@ def sample_project(tmp_path):
     page = tmp_path / "src" / "app" / "page.tsx"
     page.parent.mkdir(parents=True, exist_ok=True)
     page.write_text(
-        'import { Button } from "../components/Button";\nexport default function Page() {\n  return <Button />;\n}\n'
+        'import { Button } from "../components/Button";\n'
+        "export default function Page() {\n"
+        "  return <Button />;\n"
+        "}\n"
     )
 
     deadpage = tmp_path / "src" / "app" / "deadpage" / "page.tsx"
@@ -102,7 +105,12 @@ class TestConfig:
     def test_load_from_yml(self, tmp_path):
         config_file = tmp_path / ".deadcode.yml"
         config_file.write_text(
-            'ignore:\n  - "generated/"\n  - "legacy/"\ncategories:\n  - unused_export\nfail_threshold: 3\n'
+            "ignore:\n"
+            '  - "generated/"\n'
+            '  - "legacy/"\n'
+            "categories:\n"
+            "  - unused_export\n"
+            "fail_threshold: 3\n"
         )
         config = DeadCodeConfig.load(tmp_path)
         assert config.ignore == ["generated/", "legacy/"]
@@ -234,7 +242,8 @@ class TestBugFixUnreferencedComponents:
         comp.write_text("export function Button() { return <div>Hi</div>; }\n")
         app = tmp_path / "src" / "App.tsx"
         app.write_text(
-            'import { Button } from "./Button";\nexport function App() { return <Button />; }\n'
+            'import { Button } from "./Button";\n'
+            "export function App() { return <Button />; }\n"
         )
 
         scanner = DeadCodeScanner(tmp_path)
@@ -446,7 +455,8 @@ class TestRemoveNonDryRun:
         mod = tmp_path / "src" / "mod.ts"
         mod.parent.mkdir(parents=True, exist_ok=True)
         mod.write_text(
-            "export function unusedA() { return 1; }\nexport function unusedB() { return 2; }\n"
+            "export function unusedA() { return 1; }\n"
+            "export function unusedB() { return 2; }\n"
         )
 
         import unittest.mock
@@ -465,7 +475,8 @@ class TestRemoveNonDryRun:
         mod = tmp_path / "src" / "mod.ts"
         mod.parent.mkdir(parents=True, exist_ok=True)
         mod.write_text(
-            "export function usedFunc() { return 1; }\nexport function unusedFunc() { return 2; }\n"
+            "export function usedFunc() { return 1; }\n"
+            "export function unusedFunc() { return 2; }\n"
         )
         app = tmp_path / "src" / "app.ts"
         app.write_text('import { usedFunc } from "./mod";\nusedFunc();\n')
@@ -669,7 +680,9 @@ class TestScannerEdgeCases:
         """CSS classes with utility prefixes (hover:, focus:, etc.) should be skipped."""
         css = tmp_path / "styles.css"
         css.write_text(
-            ".hover:bg-red { color: red; }\n.focus:ring { outline: none; }\n.normal-class { color: blue; }\n"
+            ".hover:bg-red { color: red; }\n"
+            ".focus:ring { outline: none; }\n"
+            ".normal-class { color: blue; }\n"
         )
         # No JSX using any of these
 
