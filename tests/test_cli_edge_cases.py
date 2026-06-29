@@ -42,7 +42,9 @@ class TestCliEdgeCases:
     def test_fail_threshold_exits_high(self, runner, tmp_path):
         """--fail=0 exits 1 when findings exist (covers fail threshold path)."""
         (tmp_path / "src" / "unused.ts").parent.mkdir(parents=True, exist_ok=True)
-        (tmp_path / "src" / "unused.ts").write_text("export function unused() { return 1; }\n")
+        (tmp_path / "src" / "unused.ts").write_text(
+            "export function unused() { return 1; }\n"
+        )
         result = runner.invoke(cli, ["-p", str(tmp_path), "scan", "--fail", "0"])
         assert result.exit_code == 1
         assert "FAIL" in result.output
@@ -50,10 +52,16 @@ class TestCliEdgeCases:
     def test_ignore_flag_before_subcommand(self, runner, tmp_path):
         """--ignore group option rejects submodule patterns (covers _merge_config_ignore)."""
         (tmp_path / "src" / "used.ts").parent.mkdir(parents=True, exist_ok=True)
-        (tmp_path / "src" / "used.ts").write_text("export function used() { return 1; }\n")
+        (tmp_path / "src" / "used.ts").write_text(
+            "export function used() { return 1; }\n"
+        )
         (tmp_path / "src" / "unused.ts").parent.mkdir(parents=True, exist_ok=True)
-        (tmp_path / "src" / "unused.ts").write_text("export function unused() { return 2; }\n")
-        result = runner.invoke(cli, ["-p", str(tmp_path), "--ignore", "**/unused.ts", "scan"])
+        (tmp_path / "src" / "unused.ts").write_text(
+            "export function unused() { return 2; }\n"
+        )
+        result = runner.invoke(
+            cli, ["-p", str(tmp_path), "--ignore", "**/unused.ts", "scan"]
+        )
         assert result.exit_code == 0
         assert "unused" not in result.output
 
@@ -72,7 +80,9 @@ class TestCliFormatOutput:
         """A tiny TS project with at least one dead export."""
         mod = tmp_path / "src" / "mod.ts"
         mod.parent.mkdir(parents=True, exist_ok=True)
-        mod.write_text("export function usedHelper() { return 1; }\nexport function unusedHelper() { return 2; }\n")
+        mod.write_text(
+            "export function usedHelper() { return 1; }\nexport function unusedHelper() { return 2; }\n"
+        )
         return tmp_path
 
     def test_format_compact_output(self, runner, sample):
@@ -137,7 +147,9 @@ class TestStatsCommand:
     def test_stats_basic(self, runner, tmp_path):
         """stats command shows scan summary."""
         (tmp_path / "src" / "unused.ts").parent.mkdir(parents=True, exist_ok=True)
-        (tmp_path / "src" / "unused.ts").write_text("export function unusedHelper() { return 1; }\n")
+        (tmp_path / "src" / "unused.ts").write_text(
+            "export function unusedHelper() { return 1; }\n"
+        )
         result = runner.invoke(cli, ["-p", str(tmp_path), "stats"])
         assert result.exit_code == 0
         assert "Files scanned" in result.output
