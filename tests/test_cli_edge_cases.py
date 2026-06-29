@@ -81,7 +81,8 @@ class TestCliFormatOutput:
         mod = tmp_path / "src" / "mod.ts"
         mod.parent.mkdir(parents=True, exist_ok=True)
         mod.write_text(
-            "export function usedHelper() { return 1; }\nexport function unusedHelper() { return 2; }\n"
+            "export function usedHelper() { return 1; }\n"
+            "export function unusedHelper() { return 2; }\n"
         )
         return tmp_path
 
