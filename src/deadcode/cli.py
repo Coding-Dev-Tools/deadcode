@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -13,6 +14,17 @@ from rich.table import Table
 from . import __version__
 from .config import DeadCodeConfig
 from .scanner import DeadCodeScanner, Finding
+
+try:
+    from revenueholdings_license import require_license as _rh_require_license
+
+    _HAS_RH_LICENSE = True
+except ImportError:
+    _HAS_RH_LICENSE = False
+
+    def _rh_require_license(product: str) -> None:  # type: ignore[misc]
+        pass
+
 
 console = Console()
 err_console = Console(stderr=True)
@@ -37,10 +49,21 @@ FORMAT_CHOICES = click.Choice(["pretty", "compact", "github", "json"])
     multiple=True,
     help="Include only matching files (gitignore-style whitelist)",
 )
+@click.option(
+    "--require-license",
+    is_flag=True,
+    envvar="REVENUEHOLDINGS_REQUIRE_LICENSE",
+    help=(
+        "Exit with an error if revenueholdings-license is not installed "
+        "or if the license check fails. "
+        "Also enabled via REVENUEHOLDINGS_REQUIRE_LICENSE=1."
+    ),
+)
 @click.version_option(__version__, prog_name="deadcode")
 @click.pass_context
 def cli(
-    ctx: click.Context, project: str, ignore: tuple[str, ...], include: tuple[str, ...]
+    ctx: click.Context, project: str, ignore: tuple[str, ...], include: tuple[str, ...],
+    require_license: bool,
 ) -> None:
     """DeadCode — Find and remove dead code in TS/React/Next.js projects.
 
@@ -51,8 +74,22 @@ def cli(
     ctx.obj["project"] = project
     ctx.obj["ignore"] = list(ignore) if ignore else None
     ctx.obj["include"] = list(include) if include else None
+    ctx.obj["require_license"] = require_license or bool(
+        os.environ.get("REVENUEHOLDINGS_REQUIRE_LICENSE")
+    )
     # Load .deadcode.yml config
     ctx.obj["config"] = DeadCodeConfig.load(project)
+
+    # License check
+    strict = ctx.obj["require_license"]
+    if _HAS_RH_LICENSE:
+        _rh_require_license("deadcode")
+    elif strict:
+        err_console.print(
+            "[bold red]Error:[/bold red] revenueholdings-license is not installed. "
+            "Install it with: pip install revenueholdings-license"
+        )
+        sys.exit(1)
 
 
 def _merge_config_ignore(ctx: click.Context) -> list[str] | None:
@@ -155,7 +192,7 @@ def scan(
             console.print("OK — 0 findings")
         else:
             for f in findings:
-                console.print(f"{f.file}:{f.line} \u2014 {f.category}: {f.name}")
+                console.print(f"{f.file}:{f.line} — {f.category}: {f.name}")
             console.print(f"\n{len(findings)} findings")
     elif effective_format == "github":
         # GitHub Actions annotation syntax
@@ -177,7 +214,7 @@ def scan(
         )
 
         if not findings:
-            console.print("[green]✓ No dead code found![/green]")
+            console.print("[green]\u2713 No dead code found![/green]")
         else:
             # Group by category
             by_category: dict[str, list[Finding]] = {}
@@ -291,7 +328,7 @@ def remove(ctx: click.Context, dry_run: bool, category: str | None) -> None:
     removable = [f for f in findings if f.removable]
 
     if not removable:
-        console.print("[green]✓ Nothing removable found.[/green]")
+        console.print("[green]\u2713 Nothing removable found.[/green]")
         return
 
     # Group by file
@@ -332,7 +369,7 @@ def remove(ctx: click.Context, dry_run: bool, category: str | None) -> None:
             filepath.write_text("".join(lines), encoding="utf-8")
             removed_count += len(lines_to_remove)
             console.print(
-                f"[green]✓[/green] Cleaned {rel_file} ({len(lines_to_remove)} lines)"
+                f"[green]\u2713[/green] Cleaned {rel_file} ({len(lines_to_remove)} lines)"
             )
 
     action = "Would remove" if dry_run else "Removed"
