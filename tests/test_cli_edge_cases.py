@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import json
-import subprocess
-import sys
 
 import pytest
 
@@ -14,51 +12,48 @@ from deadcode.cli import cli
 class TestMainModule:
     """Tests for __main__.py entry point (0% coverage)."""
 
-    def test_main_module_runs_help(self):
+    @pytest.fixture
+    def runner(self):
+        from click.testing import CliRunner
+        return CliRunner()
+
+    def test_main_module_runs_help(self, runner):
         """python -m deadcode --help works (covers __main__.py:2-5)."""
-        result = subprocess.run(
-            [sys.executable, "-m", "deadcode", "--help"],
-            capture_output=True, text=False,
-        )
-        assert result.returncode == 0
-        assert b"Usage" in result.stdout
+        result = runner.invoke(cli, ["--help"])
+        assert result.exit_code == 0
+        assert "Usage" in result.output
 
 
 class TestCliEdgeCases:
     """Edge cases for CLI uncovered paths."""
 
-    def test_non_existent_project_exits_1(self):
-        """Scan with non-existent project exits 1 (cli.py:88-90)."""
-        result = subprocess.run(
-            [sys.executable, "-m", "deadcode", "--project", "/nonexistent/path", "scan"],
-            capture_output=True, text=False,
-        )
-        assert result.returncode == 1
+    @pytest.fixture
+    def runner(self):
+        from click.testing import CliRunner
+        return CliRunner()
 
-    def test_fail_threshold_exits_high(self, tmp_path):
+    def test_non_existent_project_exits_1(self, runner):
+        """Scan with non-existent project exits 1 (cli.py:88-90)."""
+        result = runner.invoke(cli, ["--project", "/nonexistent/path", "scan"])
+        assert result.exit_code == 1
+
+    def test_fail_threshold_exits_high(self, runner, tmp_path):
         """--fail=0 exits 1 when findings exist (covers fail threshold path)."""
         (tmp_path / "src" / "unused.ts").parent.mkdir(parents=True, exist_ok=True)
         (tmp_path / "src" / "unused.ts").write_text("export function unused() { return 1; }\n")
-        result = subprocess.run(
-            [sys.executable, "-m", "deadcode", "-p", str(tmp_path), "scan",
-             "--fail", "0"],
-            capture_output=True, text=True,
-        )
-        assert result.returncode == 1
-        assert "FAIL" in result.stdout
+        result = runner.invoke(cli, ["-p", str(tmp_path), "scan", "--fail", "0"])
+        assert result.exit_code == 1
+        assert "FAIL" in result.output
 
-    def test_ignore_flag_before_subcommand(self, tmp_path):
+    def test_ignore_flag_before_subcommand(self, runner, tmp_path):
         """--ignore group option rejects submodule patterns (covers _merge_config_ignore)."""
         (tmp_path / "src" / "used.ts").parent.mkdir(parents=True, exist_ok=True)
         (tmp_path / "src" / "used.ts").write_text("export function used() { return 1; }\n")
+        (tmp_path / "src" / "unused.ts").parent.mkdir(parents=True, exist_ok=True)
         (tmp_path / "src" / "unused.ts").write_text("export function unused() { return 2; }\n")
-        result = subprocess.run(
-            [sys.executable, "-m", "deadcode", "-p", str(tmp_path),
-             "--ignore", "**/unused.ts", "scan"],
-            capture_output=True, text=True,
-        )
-        assert result.returncode == 0
-        assert "unused" not in result.stdout
+        result = runner.invoke(cli, ["-p", str(tmp_path), "--ignore", "**/unused.ts", "scan"])
+        assert result.exit_code == 0
+        assert "unused" not in result.output
 
 
 class TestCliFormatOutput:

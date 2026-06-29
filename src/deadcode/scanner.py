@@ -66,9 +66,10 @@ _EXPORT_PATTERN = re.compile(
     re.MULTILINE,
 )
 
-# export { name }
+# export { name } — may span multiple lines; [^}] matches newlines too
 _EXPORT_LIST_PATTERN = re.compile(
     r"export\s*\{([^}]+)\}",
+    re.DOTALL,
 )
 
 # React component: function Name or const Name = ...
@@ -261,19 +262,40 @@ class DeadCodeScanner:
     def _parse_exports(
         self, content: str, rel_path: str, exports: dict[str, list[tuple[str, int]]]
     ) -> None:
-        """Extract export names from a file."""
+        """Extract export names from a file.
+
+        Handles both single-line forms::
+
+            export function foo() {}
+            export const BAR = 1;
+
+        And multi-line export-list blocks::
+
+            export {
+              Foo,
+              Bar as Baz,
+            }
+        """
+        # Named/typed exports: scan line-by-line to preserve line numbers cheaply.
         for i, line in enumerate(content.splitlines(), 1):
-            # Named exports
             for m in _EXPORT_PATTERN.finditer(line):
                 name = m.group(1)
                 exports.setdefault(name, []).append((rel_path, i))
 
-            # Export lists: export { Foo, Bar }
-            for m in _EXPORT_LIST_PATTERN.finditer(line):
-                names = [n.strip().split(" as ")[0].strip() for n in m.group(1).split(",")]
-                for name in names:
-                    if name and re.match(r"^[A-Za-z_$][\w$]*$", name):
-                        exports.setdefault(name, []).append((rel_path, i))
+        # Export-list blocks: applied to the full content so that multi-line
+        # blocks like ``export {\n  Foo,\n  Bar\n}`` are captured correctly.
+        # [^}] matches newlines, so re.DOTALL is added for clarity but [^}]
+        # already handles multi-line spans without it.
+        for m in _EXPORT_LIST_PATTERN.finditer(content):
+            # Determine the line number of the opening ``export {``.
+            line_num = content.count("\n", 0, m.start()) + 1
+            raw = m.group(1)
+            # Strip // comments so inline-annotated export lists still parse.
+            cleaned = "\n".join(line.split("//")[0] for line in raw.splitlines())
+            names = [n.strip().split(" as ")[0].strip() for n in cleaned.split(",")]
+            for name in names:
+                if name and re.match(r"^[A-Za-z_$][\w$]*$", name):
+                    exports.setdefault(name, []).append((rel_path, line_num))
 
     def _parse_imports(
         self, content: str, rel_path: str, imports: dict[str, set[str]]

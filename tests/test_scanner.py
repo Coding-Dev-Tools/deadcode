@@ -343,6 +343,109 @@ class TestCLIIntegration:
         assert "stats" in result.stdout
 
 
+class TestMultiLineExportList:
+    """Tests for multi-line export { } blocks (scanner.py fix: apply list pattern to full content)."""
+
+    def test_multiline_export_list_detected(self, tmp_path):
+        """export { Foo, Bar } split across lines should be detected as unused exports."""
+        mod = tmp_path / "src" / "mod.ts"
+        mod.parent.mkdir(parents=True, exist_ok=True)
+        mod.write_text(
+            "function Alpha() { return 1; }\n"
+            "function Beta() { return 2; }\n"
+            "export {\n"
+            "  Alpha,\n"
+            "  Beta,\n"
+            "}\n"
+        )
+
+        scanner = DeadCodeScanner(tmp_path)
+        result = scanner.scan()
+
+        export_names = {f.name for f in result.unused_exports}
+        assert "Alpha" in export_names, "Multi-line export Alpha should be detected"
+        assert "Beta" in export_names, "Multi-line export Beta should be detected"
+
+    def test_multiline_export_list_used_not_reported(self, tmp_path):
+        """Names from a multi-line export {} that are imported elsewhere should NOT be reported."""
+        mod = tmp_path / "src" / "mod.ts"
+        mod.parent.mkdir(parents=True, exist_ok=True)
+        mod.write_text(
+            "export function usedInApp() { return 1; }\n"
+            "export function alsoUnused() { return 2; }\n"
+            "export {\n"
+            "  usedInApp,\n"
+            "}\n"
+        )
+        app = tmp_path / "src" / "app.ts"
+        app.write_text('import { usedInApp } from "./mod";\nusedInApp();\n')
+
+        scanner = DeadCodeScanner(tmp_path)
+        result = scanner.scan()
+
+        export_names = {f.name for f in result.unused_exports}
+        # usedInApp appears in both an inline export and the export-list; it's imported so should be absent
+        assert "usedInApp" not in export_names, "usedInApp is imported — should not be reported"
+        assert "alsoUnused" in export_names, "alsoUnused is never imported — should be reported"
+
+    def test_multiline_export_list_with_aliases(self, tmp_path):
+        """export { Foo as Bar } aliases: the local name Foo should be tracked, not the alias."""
+        mod = tmp_path / "src" / "mod.ts"
+        mod.parent.mkdir(parents=True, exist_ok=True)
+        mod.write_text(
+            "function InternalName() { return 1; }\n"
+            "export {\n"
+            "  InternalName as PublicName,\n"
+            "}\n"
+        )
+
+        scanner = DeadCodeScanner(tmp_path)
+        result = scanner.scan()
+
+        export_names = {f.name for f in result.unused_exports}
+        # The scanner tracks the local (pre-alias) name
+        assert "InternalName" in export_names
+        # The alias 'PublicName' should not appear as a spurious finding
+        assert "PublicName" not in export_names
+
+    def test_single_line_export_list_still_works(self, tmp_path):
+        """Single-line export { Foo, Bar } should continue to work after the fix."""
+        mod = tmp_path / "src" / "mod.ts"
+        mod.parent.mkdir(parents=True, exist_ok=True)
+        mod.write_text(
+            "const alpha = 1;\n"
+            "const beta = 2;\n"
+            "export { alpha, beta };\n"
+        )
+
+        scanner = DeadCodeScanner(tmp_path)
+        result = scanner.scan()
+
+        export_names = {f.name for f in result.unused_exports}
+        assert "alpha" in export_names
+        assert "beta" in export_names
+
+    def test_export_list_with_inline_comments(self, tmp_path):
+        """Inline // comments inside export lists should not mask other exports."""
+        mod = tmp_path / "src" / "mod.ts"
+        mod.parent.mkdir(parents=True, exist_ok=True)
+        mod.write_text(
+            "function Alpha() { return 1; }\n"
+            "function Beta() { return 2; }\n"
+            "export {\n"
+            "  Alpha, // kept for clarity\n"
+            "  Beta,\n"
+            "}\n"
+        )
+
+        scanner = DeadCodeScanner(tmp_path)
+        result = scanner.scan()
+
+        export_names = {f.name for f in result.unused_exports}
+        assert "Alpha" in export_names
+        assert "Beta" in export_names
+
+
 class TestIncludePatterns:
     """Tests for the include_patterns scanner feature."""
 
