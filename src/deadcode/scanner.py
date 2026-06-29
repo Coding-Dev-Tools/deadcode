@@ -124,7 +124,9 @@ class DeadCodeScanner:
         )
         self.include_spec = None
         if include_patterns:
-            self.include_spec = pathspec.PathSpec.from_lines("gitignore", include_patterns)
+            self.include_spec = pathspec.PathSpec.from_lines(
+                "gitignore", include_patterns
+            )
 
     @staticmethod
     def _default_ignore_patterns() -> list[str]:
@@ -221,13 +223,21 @@ class DeadCodeScanner:
 
             # Filter out ignored directories
             dirs[:] = [
-                d for d in dirs if not self.ignore_spec.match_file(f"{rel_root}/{d}/" if rel_root != "." else f"{d}/")
+                d
+                for d in dirs
+                if not self.ignore_spec.match_file(
+                    f"{rel_root}/{d}/" if rel_root != "." else f"{d}/"
+                )
             ]
 
             # Filter out non-included directories when include_spec is set
             if self.include_spec:
                 dirs[:] = [
-                    d for d in dirs if self.include_spec.match_file(f"{rel_root}/{d}/" if rel_root != "." else f"{d}/")
+                    d
+                    for d in dirs
+                    if self.include_spec.match_file(
+                        f"{rel_root}/{d}/" if rel_root != "." else f"{d}/"
+                    )
                 ]
 
             for fname in filenames:
@@ -262,7 +272,9 @@ class DeadCodeScanner:
     def _is_css_file(rel_path: str) -> bool:
         return rel_path.endswith((".css", ".scss", ".module.css"))
 
-    def _parse_exports(self, content: str, rel_path: str, exports: dict[str, list[tuple[str, int]]]) -> None:
+    def _parse_exports(
+        self, content: str, rel_path: str, exports: dict[str, list[tuple[str, int]]]
+    ) -> None:
         """Extract export names from a file.
 
         Handles both single-line forms::
@@ -298,12 +310,16 @@ class DeadCodeScanner:
                 if name and re.match(r"^[A-Za-z_$][\w$]*$", name):
                     exports.setdefault(name, []).append((rel_path, line_num))
 
-    def _parse_imports(self, content: str, rel_path: str, imports: dict[str, set[str]]) -> None:
+    def _parse_imports(
+        self, content: str, rel_path: str, imports: dict[str, set[str]]
+    ) -> None:
         """Extract import names from a file."""
         for m in _IMPORT_PATTERN.finditer(content):
             # Named imports: import { Foo, Bar } from '...'
             if m.group(1):
-                names = [n.strip().split(" as ")[0].strip() for n in m.group(1).split(",")]
+                names = [
+                    n.strip().split(" as ")[0].strip() for n in m.group(1).split(",")
+                ]
                 for name in names:
                     if name:
                         imports.setdefault(name, set()).add(rel_path)
@@ -312,7 +328,9 @@ class DeadCodeScanner:
                 name = m.group(2)
                 imports.setdefault(name, set()).add(rel_path)
 
-    def _parse_css_classes(self, content: str, rel_path: str, css_classes: dict[str, list[tuple[str, int]]]) -> None:
+    def _parse_css_classes(
+        self, content: str, rel_path: str, css_classes: dict[str, list[tuple[str, int]]]
+    ) -> None:
         """Extract CSS class names defined in a stylesheet."""
         for i, line in enumerate(content.splitlines(), 1):
             for m in _CSS_CLASS_PATTERN.finditer(line):
@@ -327,7 +345,9 @@ class DeadCodeScanner:
                     for cls in group.split():
                         used_css_classes.add(cls)
 
-    def _parse_components(self, content: str, rel_path: str, components: dict[str, str]) -> None:
+    def _parse_components(
+        self, content: str, rel_path: str, components: dict[str, str]
+    ) -> None:
         """Extract React component definitions."""
         for m in _COMPONENT_PATTERN.finditer(content):
             name = m.group(1)
@@ -403,7 +423,9 @@ class DeadCodeScanner:
             return
 
         # Build set of all route paths referenced in links
-        link_pattern = re.compile(r'(?:href|to|push|replace)\s*[=:]\s*["\'](/[^"\']*)["\']')
+        link_pattern = re.compile(
+            r'(?:href|to|push|replace)\s*[=:]\s*["\'](/[^"\']*)["\']'
+        )
         referenced_routes: set[str] = set()
 
         for filepath in all_files:
@@ -449,7 +471,19 @@ class DeadCodeScanner:
         """Find CSS classes defined but never used in JSX."""
         for cls, locations in css_classes.items():
             # Skip common utility classes and pseudo-selectors
-            if cls.startswith(("hover:", "focus:", "active:", "disabled:", "group-", "sm:", "md:", "lg:", "xl:")):
+            if cls.startswith(
+                (
+                    "hover:",
+                    "focus:",
+                    "active:",
+                    "disabled:",
+                    "group-",
+                    "sm:",
+                    "md:",
+                    "lg:",
+                    "xl:",
+                )
+            ):
                 continue
             if cls in used_css_classes:
                 continue
@@ -473,7 +507,15 @@ class DeadCodeScanner:
     ) -> None:
         """Find React components that are defined but never imported."""
         # Skip page/layout components (Next.js convention)
-        skip_suffixes = ("Page", "Layout", "Template", "Loading", "Error", "NotFound", "GlobalError")
+        skip_suffixes = (
+            "Page",
+            "Layout",
+            "Template",
+            "Loading",
+            "Error",
+            "NotFound",
+            "GlobalError",
+        )
 
         for comp_name, file in components.items():
             # Skip Next.js special files
