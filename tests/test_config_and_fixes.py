@@ -40,30 +40,21 @@ def sample_project(tmp_path):
     )
 
     widget = tmp_path / "src" / "components" / "UnusedWidget.tsx"
-    widget.write_text(
-        "export function UnusedWidget() {\n  return <div>Unused</div>;\n}\n"
-    )
+    widget.write_text("export function UnusedWidget() {\n  return <div>Unused</div>;\n}\n")
 
     css = tmp_path / "src" / "styles" / "main.css"
     css.parent.mkdir(parents=True, exist_ok=True)
-    css.write_text(
-        ".btn-primary {\n  background: blue;\n}\n.orphaned-class {\n  color: red;\n}\n"
-    )
+    css.write_text(".btn-primary {\n  background: blue;\n}\n.orphaned-class {\n  color: red;\n}\n")
 
     page = tmp_path / "src" / "app" / "page.tsx"
     page.parent.mkdir(parents=True, exist_ok=True)
     page.write_text(
-        'import { Button } from "../components/Button";\n'
-        "export default function Page() {\n"
-        "  return <Button />;\n"
-        "}\n"
+        'import { Button } from "../components/Button";\nexport default function Page() {\n  return <Button />;\n}\n'
     )
 
     deadpage = tmp_path / "src" / "app" / "deadpage" / "page.tsx"
     deadpage.parent.mkdir(parents=True, exist_ok=True)
-    deadpage.write_text(
-        "export default function DeadPage() {\n  return <div>Dead</div>;\n}\n"
-    )
+    deadpage.write_text("export default function DeadPage() {\n  return <div>Dead</div>;\n}\n")
 
     return tmp_path
 
@@ -105,12 +96,7 @@ class TestConfig:
     def test_load_from_yml(self, tmp_path):
         config_file = tmp_path / ".deadcode.yml"
         config_file.write_text(
-            "ignore:\n"
-            '  - "generated/"\n'
-            '  - "legacy/"\n'
-            "categories:\n"
-            "  - unused_export\n"
-            "fail_threshold: 3\n"
+            'ignore:\n  - "generated/"\n  - "legacy/"\ncategories:\n  - unused_export\nfail_threshold: 3\n'
         )
         config = DeadCodeConfig.load(tmp_path)
         assert config.ignore == ["generated/", "legacy/"]
@@ -151,9 +137,7 @@ class TestFailOption:
 
     def test_fail_exits_0_when_below_threshold(self, runner, sample_project):
         # Set a very high threshold
-        result = runner.invoke(
-            cli, ["-p", str(sample_project), "scan", "--fail", "999"]
-        )
+        result = runner.invoke(cli, ["-p", str(sample_project), "scan", "--fail", "999"])
         assert result.exit_code == 0
 
     def test_fail_zero_exits_1_on_any_finding(self, runner, sample_project):
@@ -161,9 +145,7 @@ class TestFailOption:
         assert result.exit_code == 1
 
     def test_fail_with_json_output(self, runner, sample_project):
-        result = runner.invoke(
-            cli, ["-p", str(sample_project), "scan", "--json-output", "--fail", "1"]
-        )
+        result = runner.invoke(cli, ["-p", str(sample_project), "scan", "--json-output", "--fail", "1"])
         assert result.exit_code == 1
         # JSON should still be valid
         data = json.loads(result.output, strict=False)
@@ -206,9 +188,7 @@ class TestConfigIgnoreMerge:
         mod.write_text("export function unused() { return 1; }\n")
 
         # -i is a group-level option, must come before subcommand
-        result = runner.invoke(
-            cli, ["-p", str(tmp_path), "-i", "src/", "scan", "--json-output"]
-        )
+        result = runner.invoke(cli, ["-p", str(tmp_path), "-i", "src/", "scan", "--json-output"])
         assert result.exit_code == 0
         data = json.loads(result.output, strict=False)
         assert len(data["findings"]) == 0
@@ -223,15 +203,11 @@ class TestConfigIgnoreMerge:
         config.write_text('ignore:\n  - "nonexistent/"\n')
 
         # CLI --ignore with a matching pattern
-        result = runner.invoke(
-            cli, ["-p", str(tmp_path), "-i", "*.ts", "scan", "--json-output"]
-        )
+        result = runner.invoke(cli, ["-p", str(tmp_path), "-i", "*.ts", "scan", "--json-output"])
         assert result.exit_code == 0
         data = json.loads(result.output, strict=False)
         # Both ignores combined should cover the .ts file
-        assert len(data["findings"]) == 0, (
-            f"Expected 0 findings with merged ignores, got {len(data['findings'])}"
-        )
+        assert len(data["findings"]) == 0, f"Expected 0 findings with merged ignores, got {len(data['findings'])}"
 
 
 class TestBugFixUnreferencedComponents:
@@ -241,18 +217,13 @@ class TestBugFixUnreferencedComponents:
         comp.parent.mkdir(parents=True, exist_ok=True)
         comp.write_text("export function Button() { return <div>Hi</div>; }\n")
         app = tmp_path / "src" / "App.tsx"
-        app.write_text(
-            'import { Button } from "./Button";\n'
-            "export function App() { return <Button />; }\n"
-        )
+        app.write_text('import { Button } from "./Button";\nexport function App() { return <Button />; }\n')
 
         scanner = DeadCodeScanner(tmp_path)
         result = scanner.scan()
 
         comp_names = {f.name for f in result.unreferenced_components}
-        assert "Button" not in comp_names, (
-            "Button should not be unreferenced — it's imported by App.tsx"
-        )
+        assert "Button" not in comp_names, "Button should not be unreferenced — it's imported by App.tsx"
 
     def test_component_not_imported_is_reported(self, tmp_path):
         """Component with zero imports should still be reported."""
@@ -315,9 +286,7 @@ class TestIncludeCLI:
         lib.parent.mkdir(parents=True, exist_ok=True)
         lib.write_text("export function unusedInLib() { return 2; }\n")
 
-        result = runner.invoke(
-            cli, ["-p", str(tmp_path), "--include", "src/", "scan", "--json-output"]
-        )
+        result = runner.invoke(cli, ["-p", str(tmp_path), "--include", "src/", "scan", "--json-output"])
         assert result.exit_code == 0
         data = json.loads(result.output, strict=False)
         finding_names = {f["name"] for f in data["findings"]}
@@ -375,9 +344,7 @@ class TestIncludeCLI:
         lib.parent.mkdir(parents=True, exist_ok=True)
         lib.write_text("export function bar() { return 2; }\n")
 
-        result = runner.invoke(
-            cli, ["-p", str(tmp_path), "--include", "src/", "remove", "--dry-run"]
-        )
+        result = runner.invoke(cli, ["-p", str(tmp_path), "--include", "src/", "remove", "--dry-run"])
 
         assert result.exit_code == 0
 
@@ -406,9 +373,7 @@ class TestIncludeCLI:
         )
         assert result.exit_code == 0
         data = json.loads(result.output, strict=False)
-        assert data["files_scanned"] == 1, (
-            "only mod.ts should be scanned, internal/ ignored"
-        )
+        assert data["files_scanned"] == 1, "only mod.ts should be scanned, internal/ ignored"
         finding_names = {f["name"] for f in data["findings"]}
         assert "foo" in finding_names
         assert "bar" not in finding_names
@@ -433,12 +398,8 @@ class TestIncludeCLI:
         mod.parent.mkdir(parents=True, exist_ok=True)
         mod.write_text("export function foo() { return 1; }\n")
 
-        result = runner.invoke(
-            cli, ["-p", str(tmp_path), "--include", "src/[invalid", "scan"]
-        )
-        assert result.exit_code in (0, 2), (
-            "should not crash, may produce error or proceed"
-        )
+        result = runner.invoke(cli, ["-p", str(tmp_path), "--include", "src/[invalid", "scan"])
+        assert result.exit_code in (0, 2), "should not crash, may produce error or proceed"
 
 
 class TestRemoveNonDryRun:
@@ -454,17 +415,12 @@ class TestRemoveNonDryRun:
         """remove without --dry-run should blank the flagged lines in the file."""
         mod = tmp_path / "src" / "mod.ts"
         mod.parent.mkdir(parents=True, exist_ok=True)
-        mod.write_text(
-            "export function unusedA() { return 1; }\n"
-            "export function unusedB() { return 2; }\n"
-        )
+        mod.write_text("export function unusedA() { return 1; }\nexport function unusedB() { return 2; }\n")
 
         import unittest.mock
 
         with unittest.mock.patch("time.sleep"):
-            result = self._r.invoke(
-                cli, ["-p", str(tmp_path), "remove", "-c", "unused_export"]
-            )
+            result = self._r.invoke(cli, ["-p", str(tmp_path), "remove", "-c", "unused_export"])
         assert result.exit_code == 0
 
         content = mod.read_text()
@@ -474,19 +430,14 @@ class TestRemoveNonDryRun:
         """remove should not blank lines for exports that are imported elsewhere."""
         mod = tmp_path / "src" / "mod.ts"
         mod.parent.mkdir(parents=True, exist_ok=True)
-        mod.write_text(
-            "export function usedFunc() { return 1; }\n"
-            "export function unusedFunc() { return 2; }\n"
-        )
+        mod.write_text("export function usedFunc() { return 1; }\nexport function unusedFunc() { return 2; }\n")
         app = tmp_path / "src" / "app.ts"
         app.write_text('import { usedFunc } from "./mod";\nusedFunc();\n')
 
         import unittest.mock
 
         with unittest.mock.patch("time.sleep"):
-            result = self._r.invoke(
-                cli, ["-p", str(tmp_path), "remove", "-c", "unused_export"]
-            )
+            result = self._r.invoke(cli, ["-p", str(tmp_path), "remove", "-c", "unused_export"])
         assert result.exit_code == 0
 
         content = mod.read_text()
@@ -502,14 +453,10 @@ class TestRemoveNonDryRun:
         # component in a page file (excluded by /page. check).
         page = tmp_path / "app" / "page.tsx"
         page.parent.mkdir(parents=True, exist_ok=True)
-        page.write_text(
-            'export function Home() { return <a href="/about">About</a>; }\n'
-        )
+        page.write_text('export function Home() { return <a href="/about">About</a>; }\n')
         about = tmp_path / "app" / "about" / "page.tsx"
         about.parent.mkdir(parents=True, exist_ok=True)
-        about.write_text(
-            "export default function About() { return <div>About</div>; }\n"
-        )
+        about.write_text("export default function About() { return <div>About</div>; }\n")
 
         result = self._r.invoke(cli, ["-p", str(tmp_path), "remove", "--dry-run"])
         assert result.exit_code == 0
@@ -541,9 +488,7 @@ class TestRemoveNonDryRun:
             if fpath.exists():
                 fpath.unlink()
 
-        result = runner.invoke(
-            cli, ["-p", str(tmp_path), "remove", "-c", "unused_export"]
-        )
+        result = runner.invoke(cli, ["-p", str(tmp_path), "remove", "-c", "unused_export"])
         assert result.exit_code == 0
 
 
@@ -556,15 +501,9 @@ class TestPackagingQuality:
 
         eps = entry_points()
         # Python 3.12+ returns a SelectableGroups; 3.10 returns dict
-        scripts = (
-            eps.select(group="console_scripts")
-            if hasattr(eps, "select")
-            else eps.get("console_scripts", [])
-        )
+        scripts = eps.select(group="console_scripts") if hasattr(eps, "select") else eps.get("console_scripts", [])
         deadcode_eps = [e for e in scripts if e.name == "deadcode"]
-        assert len(deadcode_eps) >= 1, (
-            "Expected at least one 'deadcode' console_scripts entry point"
-        )
+        assert len(deadcode_eps) >= 1, "Expected at least one 'deadcode' console_scripts entry point"
         ep = deadcode_eps[0]
         assert "deadcode.cli:cli" in str(ep.value) or "deadcode.cli:cli" in str(ep)
 
@@ -575,9 +514,7 @@ class TestPackagingQuality:
         import deadcode
 
         pkg_dir = Path(deadcode.__file__).parent
-        assert (pkg_dir / "py.typed").exists(), (
-            "py.typed marker missing — needed for PEP 561 type-checking support"
-        )
+        assert (pkg_dir / "py.typed").exists(), "py.typed marker missing — needed for PEP 561 type-checking support"
 
     def test_ruff_known_first_party(self):
         """ruff known-first-party should be ['deadcode'], not ['*']."""
@@ -588,13 +525,9 @@ class TestPackagingQuality:
         pyproject = Path(__file__).parent.parent / "pyproject.toml"
         with open(pyproject, "rb") as f:
             data = tomllib.load(f)
-        isort_cfg = (
-            data.get("tool", {}).get("ruff", {}).get("lint", {}).get("isort", {})
-        )
+        isort_cfg = data.get("tool", {}).get("ruff", {}).get("lint", {}).get("isort", {})
         kfp = isort_cfg.get("known-first-party", [])
-        assert kfp == ["deadcode"], (
-            f"known-first-party should be ['deadcode'], got {kfp}"
-        )
+        assert kfp == ["deadcode"], f"known-first-party should be ['deadcode'], got {kfp}"
 
     def test_package_data_includes_py_typed(self):
         """pyproject.toml should have package-data config for py.typed."""
@@ -606,9 +539,7 @@ class TestPackagingQuality:
         with open(pyproject, "rb") as f:
             data = tomllib.load(f)
         pkg_data = data.get("tool", {}).get("setuptools", {}).get("package-data", {})
-        assert "deadcode" in pkg_data, (
-            "Expected [tool.setuptools.package-data] section for 'deadcode'"
-        )
+        assert "deadcode" in pkg_data, "Expected [tool.setuptools.package-data] section for 'deadcode'"
         assert "py.typed" in pkg_data["deadcode"], (
             f"Expected 'py.typed' in package-data for deadcode, got {pkg_data['deadcode']}"
         )
@@ -621,9 +552,7 @@ class TestScannerEdgeCases:
         """Dynamic routes (with [param]) should not be flagged as dead."""
         page = tmp_path / "app" / "users" / "[id]" / "page.tsx"
         page.parent.mkdir(parents=True, exist_ok=True)
-        page.write_text(
-            "export default function UserProfile() { return <div>Profile</div>; }\n"
-        )
+        page.write_text("export default function UserProfile() { return <div>Profile</div>; }\n")
 
         scanner = DeadCodeScanner(tmp_path)
         result = scanner.scan()
@@ -648,9 +577,7 @@ class TestScannerEdgeCases:
         """Components in layout.tsx files should not be reported as unreferenced."""
         layout = tmp_path / "app" / "layout.tsx"
         layout.parent.mkdir(parents=True, exist_ok=True)
-        layout.write_text(
-            "export function RootLayout() { return <div>Layout</div>; }\n"
-        )
+        layout.write_text("export function RootLayout() { return <div>Layout</div>; }\n")
 
         scanner = DeadCodeScanner(tmp_path)
         result = scanner.scan()
@@ -680,9 +607,7 @@ class TestScannerEdgeCases:
         """CSS classes with utility prefixes (hover:, focus:, etc.) should be skipped."""
         css = tmp_path / "styles.css"
         css.write_text(
-            ".hover:bg-red { color: red; }\n"
-            ".focus:ring { outline: none; }\n"
-            ".normal-class { color: blue; }\n"
+            ".hover:bg-red { color: red; }\n.focus:ring { outline: none; }\n.normal-class { color: blue; }\n"
         )
         # No JSX using any of these
 
@@ -691,12 +616,8 @@ class TestScannerEdgeCases:
 
         orphaned = {f.name for f in result.orphaned_css}
         # Utility-prefixed classes should be skipped (starts with hover:, focus:)
-        assert "hover:bg-red" not in orphaned, (
-            "hover:bg-red should be skipped by utility prefix check"
-        )
-        assert "focus:ring" not in orphaned, (
-            "focus:ring should be skipped by utility prefix check"
-        )
+        assert "hover:bg-red" not in orphaned, "hover:bg-red should be skipped by utility prefix check"
+        assert "focus:ring" not in orphaned, "focus:ring should be skipped by utility prefix check"
         # Normal class without a utility prefix IS orphaned
         assert "normal-class" in orphaned
         # Verify the full utility class names are captured (not truncated at colon)
@@ -706,12 +627,8 @@ class TestScannerEdgeCases:
                 css_classes.add(finding.name)
         # If hover:bg-red or focus:ring appear as orphaned (before skip), that's expected
         # Names like 'hover' or 'focus' alone should NOT appear (regression check)
-        assert "hover" not in orphaned, (
-            "hover should not appear alone — it's part of hover:bg-red"
-        )
-        assert "focus" not in orphaned, (
-            "focus should not appear alone — it's part of focus:ring"
-        )
+        assert "hover" not in orphaned, "hover should not appear alone — it's part of hover:bg-red"
+        assert "focus" not in orphaned, "focus should not appear alone — it's part of focus:ring"
 
     def test_scan_read_error_recorded(self, tmp_path):
         """Scanner should record errors for files it can't read."""
@@ -749,9 +666,7 @@ class TestScannerEdgeCases:
         result = scanner.scan()
 
         unused_names = {f.name for f in result.unused_exports}
-        assert "helper" not in unused_names, (
-            "helper should be recognized as imported via default import"
-        )
+        assert "helper" not in unused_names, "helper should be recognized as imported via default import"
 
     def test_scan_collect_files_with_ignore(self, tmp_path):
         """Scanner._collect_files handles ignore_spec correctly (covers scanner.py:238-241)."""
