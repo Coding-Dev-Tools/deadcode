@@ -43,12 +43,16 @@ def sample_project(tmp_path):
 
     # src/components/UnusedWidget.tsx - never imported
     widget = tmp_path / "src" / "components" / "UnusedWidget.tsx"
-    widget.write_text("export function UnusedWidget() {\n  return <div>Unused</div>;\n}\n")
+    widget.write_text(
+        "export function UnusedWidget() {\n  return <div>Unused</div>;\n}\n"
+    )
 
     # src/styles/main.css - with orphaned class
     css = tmp_path / "src" / "styles" / "main.css"
     css.parent.mkdir(parents=True, exist_ok=True)
-    css.write_text(".btn-primary {\n  background: blue;\n}\n.orphaned-class {\n  color: red;\n}\n")
+    css.write_text(
+        ".btn-primary {\n  background: blue;\n}\n.orphaned-class {\n  color: red;\n}\n"
+    )
 
     # src/app/page.tsx - Next.js page (entry point)
     page = tmp_path / "src" / "app" / "page.tsx"
@@ -60,7 +64,9 @@ def sample_project(tmp_path):
     # src/app/deadpage/page.tsx - dead route
     deadpage = tmp_path / "src" / "app" / "deadpage" / "page.tsx"
     deadpage.parent.mkdir(parents=True, exist_ok=True)
-    deadpage.write_text("export default function DeadPage() {\n  return <div>Dead</div>;\n}\n")
+    deadpage.write_text(
+        "export default function DeadPage() {\n  return <div>Dead</div>;\n}\n"
+    )
 
     return tmp_path
 
@@ -121,7 +127,12 @@ class TestScanner:
         result = scanner.scan()
         # Verify all findings are categorized
         for f in result.findings:
-            assert f.category in ("unused_export", "dead_route", "orphaned_css", "unreferenced_component")
+            assert f.category in (
+                "unused_export",
+                "dead_route",
+                "orphaned_css",
+                "unreferenced_component",
+            )
 
 
 class TestExportParsing:
@@ -165,9 +176,13 @@ class TestExportParsing:
 class TestCSSParsing:
     def test_orphaned_css_detection(self, tmp_path):
         css = tmp_path / "styles.css"
-        css.write_text(".used-class { color: blue; }\n.orphaned-class { color: red; }\n")
+        css.write_text(
+            ".used-class { color: blue; }\n.orphaned-class { color: red; }\n"
+        )
         component = tmp_path / "Component.tsx"
-        component.write_text('export function Component() {\n  return <div className="used-class">Hi</div>;\n}\n')
+        component.write_text(
+            'export function Component() {\n  return <div className="used-class">Hi</div>;\n}\n'
+        )
 
         scanner = DeadCodeScanner(tmp_path)
         result = scanner.scan()
@@ -181,7 +196,9 @@ class TestRouteDetection:
     def test_nextjs_app_router_route(self, tmp_path):
         page = tmp_path / "app" / "about" / "page.tsx"
         page.parent.mkdir(parents=True, exist_ok=True)
-        page.write_text("export default function About() { return <div>About</div>; }\n")
+        page.write_text(
+            "export default function About() { return <div>About</div>; }\n"
+        )
 
         scanner = DeadCodeScanner(tmp_path)
         result = scanner.scan()
@@ -204,10 +221,14 @@ class TestRouteDetection:
     def test_linked_route_not_dead(self, tmp_path):
         page = tmp_path / "app" / "page.tsx"
         page.parent.mkdir(parents=True, exist_ok=True)
-        page.write_text('export default function Home() { return <a href="/about">About</a>; }\n')
+        page.write_text(
+            'export default function Home() { return <a href="/about">About</a>; }\n'
+        )
         about = tmp_path / "app" / "about" / "page.tsx"
         about.parent.mkdir(parents=True, exist_ok=True)
-        about.write_text("export default function About() { return <div>About</div>; }\n")
+        about.write_text(
+            "export default function About() { return <div>About</div>; }\n"
+        )
 
         scanner = DeadCodeScanner(tmp_path)
         result = scanner.scan()
@@ -235,14 +256,18 @@ class TestCLIIntegration:
         assert "DeadCode Scan" in result.output
 
     def test_scan_json_output(self, runner, sample_project):
-        result = runner.invoke(cli, ["-p", str(sample_project), "scan", "--json-output"])
+        result = runner.invoke(
+            cli, ["-p", str(sample_project), "scan", "--json-output"]
+        )
         assert result.exit_code == 0
         data = json.loads(result.output, strict=False)
         assert "findings" in data
         assert "files_scanned" in data
 
     def test_scan_category_filter(self, runner, sample_project):
-        result = runner.invoke(cli, ["-p", str(sample_project), "scan", "-c", "orphaned_css"])
+        result = runner.invoke(
+            cli, ["-p", str(sample_project), "scan", "-c", "orphaned_css"]
+        )
         assert result.exit_code == 0
         # Text output should mention the category
         assert "Orphaned CSS" in result.output
@@ -254,7 +279,11 @@ class TestCLIIntegration:
     def test_remove_dry_run(self, runner, sample_project):
         result = runner.invoke(cli, ["-p", str(sample_project), "remove", "--dry-run"])
         assert result.exit_code == 0
-        assert "WOULD REMOVE" in result.output or "Nothing removable" in result.output or result.exit_code == 0
+        assert (
+            "WOULD REMOVE" in result.output
+            or "Nothing removable" in result.output
+            or result.exit_code == 0
+        )
 
     def test_stats_command(self, runner, sample_project):
         result = runner.invoke(cli, ["-p", str(sample_project), "stats"])
@@ -268,7 +297,9 @@ class TestCLIIntegration:
         mod.parent.mkdir(parents=True, exist_ok=True)
         mod.write_text("export function unusedFunc() { return 1; }\n")
 
-        result = runner.invoke(cli, ["-p", str(tmp_path), "-i", "src/", "scan", "--json-output"])
+        result = runner.invoke(
+            cli, ["-p", str(tmp_path), "-i", "src/", "scan", "--json-output"]
+        )
         assert result.exit_code == 0
         import json
 
@@ -277,14 +308,19 @@ class TestCLIIntegration:
 
     def test_remove_category_filter(self, runner, sample_project):
         """remove --dry-run --category should filter by category."""
-        result = runner.invoke(cli, ["-p", str(sample_project), "remove", "--dry-run", "-c", "orphaned_css"])
+        result = runner.invoke(
+            cli,
+            ["-p", str(sample_project), "remove", "--dry-run", "-c", "orphaned_css"],
+        )
         assert result.exit_code == 0
         # Should mention orphaned class
         assert "orphaned-class" in result.output or "Nothing removable" in result.output
 
     def test_remove_nonexistent_dir(self, runner):
         """remove should give graceful error for nonexistent project dir."""
-        result = runner.invoke(cli, ["-p", "/nonexistent/test/path", "remove", "--dry-run"])
+        result = runner.invoke(
+            cli, ["-p", "/nonexistent/test/path", "remove", "--dry-run"]
+        )
         assert result.exit_code != 0
         assert "not found" in result.output
 
@@ -350,14 +386,20 @@ class TestMultiLineExportList:
 
         export_names = {f.name for f in result.unused_exports}
         # usedInApp appears in both an inline export and the export-list; it's imported so should be absent
-        assert "usedInApp" not in export_names, "usedInApp is imported — should not be reported"
-        assert "alsoUnused" in export_names, "alsoUnused is never imported — should be reported"
+        assert "usedInApp" not in export_names, (
+            "usedInApp is imported — should not be reported"
+        )
+        assert "alsoUnused" in export_names, (
+            "alsoUnused is never imported — should be reported"
+        )
 
     def test_multiline_export_list_with_aliases(self, tmp_path):
         """export { Foo as Bar } aliases: the local name Foo should be tracked, not the alias."""
         mod = tmp_path / "src" / "mod.ts"
         mod.parent.mkdir(parents=True, exist_ok=True)
-        mod.write_text("function InternalName() { return 1; }\nexport {\n  InternalName as PublicName,\n}\n")
+        mod.write_text(
+            "function InternalName() { return 1; }\nexport {\n  InternalName as PublicName,\n}\n"
+        )
 
         scanner = DeadCodeScanner(tmp_path)
         result = scanner.scan()
@@ -455,31 +497,43 @@ class TestScanFormat:
     """Tests for the new --format scan option."""
 
     def test_format_compact(self, runner, sample_project):
-        result = runner.invoke(cli, ["-p", str(sample_project), "scan", "--format=compact"])
+        result = runner.invoke(
+            cli, ["-p", str(sample_project), "scan", "--format=compact"]
+        )
         assert result.exit_code == 0
 
     def test_format_github(self, runner, sample_project):
-        result = runner.invoke(cli, ["-p", str(sample_project), "scan", "--format=github"])
+        result = runner.invoke(
+            cli, ["-p", str(sample_project), "scan", "--format=github"]
+        )
         assert result.exit_code == 0
 
     def test_format_compact_with_findings(self, runner, sample_project):
-        result = runner.invoke(cli, ["-p", str(sample_project), "scan", "--format=compact"])
+        result = runner.invoke(
+            cli, ["-p", str(sample_project), "scan", "--format=compact"]
+        )
         assert result.exit_code == 0
         assert "unusedHelper" in result.output or "No dead code" in result.output
 
     def test_format_github_with_findings(self, runner, sample_project):
-        result = runner.invoke(cli, ["-p", str(sample_project), "scan", "--format=github"])
+        result = runner.invoke(
+            cli, ["-p", str(sample_project), "scan", "--format=github"]
+        )
         assert result.exit_code == 0
         assert "::" in result.output or "No dead code" in result.output
 
     def test_format_json_legacy_alias(self, runner, sample_project):
-        result = runner.invoke(cli, ["-p", str(sample_project), "scan", "--json-output"])
+        result = runner.invoke(
+            cli, ["-p", str(sample_project), "scan", "--json-output"]
+        )
         assert result.exit_code == 0
         data = json.loads(result.output, strict=False)
         assert "findings" in data
 
     def test_format_json_explicit(self, runner, sample_project):
-        result = runner.invoke(cli, ["-p", str(sample_project), "scan", "--format=json"])
+        result = runner.invoke(
+            cli, ["-p", str(sample_project), "scan", "--format=json"]
+        )
         assert result.exit_code == 0
         data = json.loads(result.output, strict=False)
         assert "findings" in data
