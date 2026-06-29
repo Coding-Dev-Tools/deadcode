@@ -58,7 +58,10 @@ def sample_project(tmp_path):
     page = tmp_path / "src" / "app" / "page.tsx"
     page.parent.mkdir(parents=True, exist_ok=True)
     page.write_text(
-        'import { Button } from "../components/Button";\nexport default function Page() {\n  return <Button />;\n}\n'
+        'import { Button } from "../components/Button";\n'
+        "export default function Page() {\n"
+        "  return <Button />;\n"
+        "}\n"
     )
 
     # src/app/deadpage/page.tsx - dead route
@@ -139,7 +142,10 @@ class TestExportParsing:
     def test_named_exports(self, tmp_path):
         f = tmp_path / "test.ts"
         f.write_text(
-            "export function foo() {}\nexport const bar = 1;\nexport type Baz = string;\nexport interface Qux {}\n"
+            "export function foo() {}\n"
+            "export const bar = 1;\n"
+            "export type Baz = string;\n"
+            "export interface Qux {}\n"
         )
         scanner = DeadCodeScanner(tmp_path)
         result = scanner.scan()
@@ -181,7 +187,9 @@ class TestCSSParsing:
         )
         component = tmp_path / "Component.tsx"
         component.write_text(
-            'export function Component() {\n  return <div className="used-class">Hi</div>;\n}\n'
+            "export function Component() {\n"
+            '  return <div className="used-class">Hi</div>;\n'
+            "}\n"
         )
 
         scanner = DeadCodeScanner(tmp_path)
@@ -357,7 +365,12 @@ class TestMultiLineExportList:
         mod = tmp_path / "src" / "mod.ts"
         mod.parent.mkdir(parents=True, exist_ok=True)
         mod.write_text(
-            "function Alpha() { return 1; }\nfunction Beta() { return 2; }\nexport {\n  Alpha,\n  Beta,\n}\n"
+            "function Alpha() { return 1; }\n"
+            "function Beta() { return 2; }\n"
+            "export {\n"
+            "  Alpha,\n"
+            "  Beta,\n"
+            "}\n"
         )
 
         scanner = DeadCodeScanner(tmp_path)
@@ -398,7 +411,10 @@ class TestMultiLineExportList:
         mod = tmp_path / "src" / "mod.ts"
         mod.parent.mkdir(parents=True, exist_ok=True)
         mod.write_text(
-            "function InternalName() { return 1; }\nexport {\n  InternalName as PublicName,\n}\n"
+            "function InternalName() { return 1; }\n"
+            "export {\n"
+            "  InternalName as PublicName,\n"
+            "}\n"
         )
 
         scanner = DeadCodeScanner(tmp_path)
