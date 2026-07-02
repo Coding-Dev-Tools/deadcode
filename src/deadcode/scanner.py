@@ -87,9 +87,9 @@ _CSS_CLASS_PATTERN = re.compile(
     r"\.([a-zA-Z_][\w-]*(?::[\w-]+)*)\s*(?:\{|,|\[)",
 )
 
-# import statements
+# import statements (handles default, named, type-only, and mixed forms)
 _IMPORT_PATTERN = re.compile(
-    r"import\s+(?:\{([^}]+)\}|(\w+))\s+from\s+['\"]([^'\"]+)['\"]",
+    r"import\s+(?:type\s+)?(?:(\w+))?\s*,?\s*(?:\{([^}]+)\})?\s*from\s+['\"]([^'\"]+)['\"]",
 )
 
 # className="..." or className={...} in JSX
@@ -300,18 +300,26 @@ class DeadCodeScanner:
     def _parse_imports(
         self, content: str, rel_path: str, imports: dict[str, set[str]]
     ) -> None:
-        """Extract import names from a file."""
+        """Extract import names from a file.
+
+        Handles default, named, type-only, and mixed import forms:
+            import Foo from '...'
+            import { Foo, Bar } from '...'
+            import type { Foo } from '...'
+            import Foo, { Bar } from '...'
+        """
         for m in _IMPORT_PATTERN.finditer(content):
-            # Named imports: import { Foo, Bar } from '...'
-            if m.group(1):
-                names = [n.strip().split(" as ")[0].strip() for n in m.group(1).split(",")]
+            default_import = m.group(1)
+            named_imports = m.group(2)
+            module_path = m.group(3)
+
+            if default_import:
+                imports.setdefault(default_import, set()).add(rel_path)
+            if named_imports:
+                names = [n.strip().split(" as ")[0].strip() for n in named_imports.split(",")]
                 for name in names:
                     if name:
                         imports.setdefault(name, set()).add(rel_path)
-            # Default import: import Foo from '...'
-            elif m.group(2):
-                name = m.group(2)
-                imports.setdefault(name, set()).add(rel_path)
 
     def _parse_css_classes(
         self, content: str, rel_path: str, css_classes: dict[str, list[tuple[str, int]]]
