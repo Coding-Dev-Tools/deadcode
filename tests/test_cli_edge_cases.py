@@ -15,6 +15,7 @@ class TestMainModule:
     @pytest.fixture
     def runner(self):
         from click.testing import CliRunner
+
         return CliRunner()
 
     def test_main_module_runs_help(self, runner):
@@ -30,6 +31,7 @@ class TestCliEdgeCases:
     @pytest.fixture
     def runner(self):
         from click.testing import CliRunner
+
         return CliRunner()
 
     def test_non_existent_project_exits_1(self, runner):
@@ -40,7 +42,9 @@ class TestCliEdgeCases:
     def test_fail_threshold_exits_high(self, runner, tmp_path):
         """--fail=0 exits 1 when findings exist (covers fail threshold path)."""
         (tmp_path / "src" / "unused.ts").parent.mkdir(parents=True, exist_ok=True)
-        (tmp_path / "src" / "unused.ts").write_text("export function unused() { return 1; }\n")
+        (tmp_path / "src" / "unused.ts").write_text(
+            "export function unused() { return 1; }\n"
+        )
         result = runner.invoke(cli, ["-p", str(tmp_path), "scan", "--fail", "0"])
         assert result.exit_code == 1
         assert "FAIL" in result.output
@@ -48,10 +52,16 @@ class TestCliEdgeCases:
     def test_ignore_flag_before_subcommand(self, runner, tmp_path):
         """--ignore group option rejects submodule patterns (covers _merge_config_ignore)."""
         (tmp_path / "src" / "used.ts").parent.mkdir(parents=True, exist_ok=True)
-        (tmp_path / "src" / "used.ts").write_text("export function used() { return 1; }\n")
+        (tmp_path / "src" / "used.ts").write_text(
+            "export function used() { return 1; }\n"
+        )
         (tmp_path / "src" / "unused.ts").parent.mkdir(parents=True, exist_ok=True)
-        (tmp_path / "src" / "unused.ts").write_text("export function unused() { return 2; }\n")
-        result = runner.invoke(cli, ["-p", str(tmp_path), "--ignore", "**/unused.ts", "scan"])
+        (tmp_path / "src" / "unused.ts").write_text(
+            "export function unused() { return 2; }\n"
+        )
+        result = runner.invoke(
+            cli, ["-p", str(tmp_path), "--ignore", "**/unused.ts", "scan"]
+        )
         assert result.exit_code == 0
         assert "unused" not in result.output
 
@@ -62,6 +72,7 @@ class TestCliFormatOutput:
     @pytest.fixture
     def runner(self):
         from click.testing import CliRunner
+
         return CliRunner()
 
     @pytest.fixture
@@ -70,8 +81,8 @@ class TestCliFormatOutput:
         mod = tmp_path / "src" / "mod.ts"
         mod.parent.mkdir(parents=True, exist_ok=True)
         mod.write_text(
-            'export function usedHelper() { return 1; }\n'
-            'export function unusedHelper() { return 2; }\n'
+            "export function usedHelper() { return 1; }\n"
+            "export function unusedHelper() { return 2; }\n"
         )
         return tmp_path
 
@@ -113,6 +124,7 @@ class TestRemoveCommand:
     @pytest.fixture
     def runner(self):
         from click.testing import CliRunner
+
         return CliRunner()
 
     def test_remove_dry_run_nothing_removable(self, runner, tmp_path):
@@ -130,6 +142,7 @@ class TestStatsCommand:
     @pytest.fixture
     def runner(self):
         from click.testing import CliRunner
+
         return CliRunner()
 
     def test_stats_basic(self, runner, tmp_path):
