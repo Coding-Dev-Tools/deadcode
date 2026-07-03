@@ -39,10 +39,16 @@ def _line_self_contained(text: str) -> bool:
     """
     depth = 0
     in_str: str | None = None
-    prev = ""
+    escaped = False
     for ch in text:
+        if escaped:
+            escaped = False
+            continue
+        if ch == "\\":
+            escaped = True
+            continue
         if in_str is not None:
-            if ch == in_str and prev != "\\":
+            if ch == in_str:
                 in_str = None
         elif ch in ("'", '"', "`"):
             in_str = ch
@@ -52,8 +58,7 @@ def _line_self_contained(text: str) -> bool:
             depth -= 1
             if depth < 0:  # closes something opened on an earlier line
                 return False
-        prev = ch
-    return depth == 0
+    return depth == 0 and in_str is None
 
 
 @click.group()
