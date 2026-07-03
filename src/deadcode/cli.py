@@ -369,4 +369,55 @@ def remove(ctx: click.Context, dry_run: bool, category: str | None) -> None:
         else:
             for line_num in safe_lines:
                 lines[line_num - 1] = ""  # Blank the line (safer than deleting)
-         
+            if safe_lines:
+                filepath.write_text("".join(lines), encoding="utf-8")
+                removed_count += len(safe_lines)
+                console.print(
+                    f"[green]✓[/green] Cleaned {rel_file} ({len(safe_lines)} lines)"
+                )
+
+        for line_num in sorted(skipped_lines):
+            content = lines[line_num - 1].strip() if 0 < line_num <= len(lines) else ""
+            console.print(
+                f"[yellow]⚠ SKIPPED (multi-line — remove manually)[/yellow] "
+                f"{rel_file}:{line_num} — {content[:80]}"
+            )
+
+    action = "Would remove" if dry_run else "Removed"
+    console.print(f"\n[bold]{action}: {removed_count} dead code entries[/bold]")
+
+
+# ── stats ─────────────────────────────────────────────────────────────
+
+
+@cli.command()
+@click.pass_context
+def stats(ctx: click.Context) -> None:
+    """Show quick stats about the project's dead code."""
+    project = ctx.obj["project"]
+    ignore = _merge_config_ignore(ctx)
+    include_patterns = ctx.obj.get("include")
+    scanner = DeadCodeScanner(
+        project, ignore_patterns=ignore, include_patterns=include_patterns
+    )
+    result = scanner.scan()
+
+    console.print(f"Files scanned: [bold]{result.files_scanned}[/bold]")
+    console.print(
+        f"Unused exports: [bold yellow]{len(result.unused_exports)}[/bold yellow]"
+    )
+    console.print(f"Dead routes: [bold red]{len(result.dead_routes)}[/bold red]")
+    console.print(
+        f"Orphaned CSS: [bold magenta]{len(result.orphaned_css)}[/bold magenta]"
+    )
+    console.print(
+        f"Unreferenced components: [bold cyan]{len(result.unreferenced_components)}[/bold cyan]"
+    )
+    console.print(f"Total findings: [bold]{len(result.findings)}[/bold]")
+
+    if result.errors:
+        console.print(f"[yellow]Errors: {len(result.errors)}[/yellow]")
+
+
+if __name__ == "__main__":
+    cli()
