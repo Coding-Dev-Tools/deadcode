@@ -27,6 +27,35 @@ ALL_CATEGORIES = [
 FORMAT_CHOICES = click.Choice(["pretty", "compact", "github", "json"])
 
 
+def _line_self_contained(text: str) -> bool:
+    """Return True if a line's brackets/braces/parens are balanced on that line.
+
+    Used by ``remove`` to decide whether a single reported line can be safely
+    blanked. A balanced line is a complete one-liner (``export const X = 1;`` or
+    ``.foo { color: red; }``); a line that opens a brace/bracket/paren it never
+    closes is the start of a multi-line construct and must not be blanked in
+    isolation. String and template-literal contents are ignored so brackets
+    inside quotes don't skew the count.
+    """
+    depth = 0
+    in_str: str | None = None
+    prev = ""
+    for ch in text:
+        if in_str is not None:
+            if ch == in_str and prev != "\\":
+                in_str = None
+        elif ch in ("'", '"', "`"):
+            in_str = ch
+        elif ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            depth -= 1
+            if depth < 0:  # closes something opened on an earlier line
+                return False
+        prev = ch
+    return depth == 0
+
+
 @click.group()
 @click.option("--project", "-p", default=".", help="Project directory to scan")
 @click.option(
@@ -315,61 +344,29 @@ def remove(ctx: click.Context, dry_run: bool, category: str | None) -> None:
             console.print(f"[red]Error reading {rel_file}: {e}[/red]")
             continue
 
-        # Remove lines in reverse order to preserve line numbers
-        lines_to_remove = sorted(set(f.line for f in file_findings), reverse=True)
+        # Findings carry only a start line, no span. Blanking a single line of a
+        # multi-line construct (a multi-line `export { ... }`, a CSS rule, or a
+        # component body) leaves dangling, syntactically-broken code — worse than
+        # doing nothing. DeadCode is regex-based with no AST, so guard
+        # conservatively: only blank a line whose brackets/braces/parens are
+        # balanced on that line (it's a self-contained one-liner). Anything that
+        # opens an unclosed block is skipped and reported for manual removal.
+        candidate_lines = sorted(set(f.line for f in file_findings), reverse=True)
+        safe_lines = [
+            n
+            for n in candidate_lines
+            if 0 < n <= len(lines) and _line_self_contained(lines[n - 1])
+        ]
+        skipped_lines = [n for n in candidate_lines if n not in safe_lines]
 
         if dry_run:
-            for line_num in sorted(lines_to_remove):
-                content = lines[line_num - 1].rstrip() if line_num <= len(lines) else ""
+            for line_num in sorted(safe_lines):
+                content = lines[line_num - 1].strip()
                 console.print(
-                    f"[yellow]WOULD REMOVE[/yellow] {rel_file}:{line_num} — {content.strip()[:80]}"
+                    f"[yellow]WOULD REMOVE[/yellow] {rel_file}:{line_num} — {content[:80]}"
                 )
-            removed_count += len(lines_to_remove)
+            removed_count += len(safe_lines)
         else:
-            for line_num in lines_to_remove:
-                if 0 < line_num <= len(lines):
-                    lines[line_num - 1] = ""  # Blank the line (safer than deleting)
-            filepath.write_text("".join(lines), encoding="utf-8")
-            removed_count += len(lines_to_remove)
-            console.print(
-                f"[green]✓[/green] Cleaned {rel_file} ({len(lines_to_remove)} lines)"
-            )
-
-    action = "Would remove" if dry_run else "Removed"
-    console.print(f"\n[bold]{action}: {removed_count} dead code entries[/bold]")
-
-
-# ── stats ─────────────────────────────────────────────────────────────
-
-
-@cli.command()
-@click.pass_context
-def stats(ctx: click.Context) -> None:
-    """Show quick stats about the project's dead code."""
-    project = ctx.obj["project"]
-    ignore = _merge_config_ignore(ctx)
-    include_patterns = ctx.obj.get("include")
-    scanner = DeadCodeScanner(
-        project, ignore_patterns=ignore, include_patterns=include_patterns
-    )
-    result = scanner.scan()
-
-    console.print(f"Files scanned: [bold]{result.files_scanned}[/bold]")
-    console.print(
-        f"Unused exports: [bold yellow]{len(result.unused_exports)}[/bold yellow]"
-    )
-    console.print(f"Dead routes: [bold red]{len(result.dead_routes)}[/bold red]")
-    console.print(
-        f"Orphaned CSS: [bold magenta]{len(result.orphaned_css)}[/bold magenta]"
-    )
-    console.print(
-        f"Unreferenced components: [bold cyan]{len(result.unreferenced_components)}[/bold cyan]"
-    )
-    console.print(f"Total findings: [bold]{len(result.findings)}[/bold]")
-
-    if result.errors:
-        console.print(f"[yellow]Errors: {len(result.errors)}[/yellow]")
-
-
-if __name__ == "__main__":
-    cli()
+            for line_num in safe_lines:
+                lines[line_num - 1] = ""  # Blank the line (safer than deleting)
+         

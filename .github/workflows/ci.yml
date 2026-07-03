@@ -36,7 +36,7 @@ jobs:
         run: ruff check .
 
       - name: Run tests
-        run: python -m pytest tests/ -x -q
+        run: python -m pytest tests/ -q --cov=deadcode --cov-report=term-missing
 
   publish:
     needs: test

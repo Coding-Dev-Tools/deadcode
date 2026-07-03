@@ -1,7 +1,7 @@
 {
   "name": "deadcode-cli",
   "version": "0.1.1",
-  "description": "Find unused/dead code in Python projects. Static analysis tool to identify orphaned functions, classes, and imports.",
+  "description": "Find unused/dead code in TypeScript, React, and Next.js projects. Scans for orphaned exports, dead routes, unreferenced components, and unused CSS module classes.",
   "author": "Revenue Holdings <engineering@revenueholdings.dev>",
   "license": "MIT",
   "repository": {
