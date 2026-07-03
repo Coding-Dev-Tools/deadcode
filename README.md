@@ -76,8 +76,8 @@ deadcode stats
 - **Unused export detection** — finds functions, types, classes, interfaces, enums, and consts that are exported but never imported within your project
 - **Dead route detection** — detects unreachable page components in Next.js App Router projects
 - **Orphaned CSS detection** — finds CSS module classes that are defined but never referenced in TSX/JSX files
-- **Safe auto-removal** — `--dry-run` preview mode shows exactly what will be deleted before making changes
-- **Full-project AST analysis** — regex-based scanning covers export/import patterns, route detection, CSS class usage, and component references across your entire codebase
+- **Safe auto-removal** — `--dry-run` preview shows exactly what will be deleted first; `remove` only blanks self-contained single-line findings and skips (with a warning) anything spanning multiple lines, so it never leaves half-deleted, broken code
+- **Full-project scanning** — fast regex-based scanning covers export/import patterns, route detection, CSS class usage, and component references across your entire codebase (no AST/tree-sitter — deliberately dependency-free and quick)
 - **Monorepo support** — handles large projects efficiently with ignore patterns
 - **CI integration** — JSON output for automated pipelines and gating
 

@@ -583,7 +583,10 @@ class TestPackagingQuality:
         """ruff known-first-party should be ['deadcode'], not ['*']."""
         from pathlib import Path
 
-        import tomllib
+        try:
+            import tomllib  # Python >=3.11
+        except ModuleNotFoundError:
+            import tomli as tomllib  # Python 3.10 backport
 
         pyproject = Path(__file__).parent.parent / "pyproject.toml"
         with open(pyproject, "rb") as f:
@@ -600,7 +603,10 @@ class TestPackagingQuality:
         """pyproject.toml should have package-data config for py.typed."""
         from pathlib import Path
 
-        import tomllib
+        try:
+            import tomllib  # Python >=3.11
+        except ModuleNotFoundError:
+            import tomli as tomllib  # Python 3.10 backport
 
         pyproject = Path(__file__).parent.parent / "pyproject.toml"
         with open(pyproject, "rb") as f:
