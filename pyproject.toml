@@ -35,6 +35,7 @@ dev = [
     "pytest-cov>=4.0.0",
     "ruff>=0.4.0",
 ]
+license = ["revenueholdings-license>=0.1.0"]
 
 [project.urls]
 Homepage = "https://github.com/Coding-Dev-Tools/deadcode"
