@@ -2,7 +2,7 @@
   "name": "deadcode-cli",
   "version": "0.1.1",
   "description": "Find unused/dead code in Python projects. Static analysis tool to identify orphaned functions, classes, and imports.",
-  "author": "Revenue Holdings <engineering@revenueholdings.dev>",
+  "author": "Coding-Dev-Tools <engineering@revenueholdings.dev>",
   "license": "MIT",
   "repository": {
     "type": "git",
