@@ -9,7 +9,7 @@ description = "CLI tool to detect and auto-remove unused exports, dead routes, o
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
-authors = [{name = "Revenue Holdings"}]
+authors = [{name = "Coding-Dev-Tools"}]
 keywords = ["dead-code", "unused-exports", "typescript", "react", "nextjs", "cli", "css", "tree-shaking"]
 classifiers = [
     "Development Status :: 4 - Beta",
