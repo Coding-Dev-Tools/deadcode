@@ -58,10 +58,14 @@ class ScanResult:
 
 # ── Patterns ──────────────────────────────────────────────────────────
 
-# export const/let/var/function/class/type/interface/enum
+# export const/let/var/function/class/type/interface/enum.
+# Deliberately does NOT match `export default ...`: with `default` in the
+# alternation the capture group grabbed the keyword `function`/`class` as
+# the export name, flagging every default export as removable dead code.
+# Default exports are entry-point conventions and are skipped entirely.
 _EXPORT_PATTERN = re.compile(
     r"^\s*export\s+"
-    r"(?:const|let|var|function|class|type|interface|enum|default)\s+"
+    r"(?:const|let|var|function|class|type|interface|enum)\s+"
     r"([A-Za-z_$][\w$]*)",
     re.MULTILINE,
 )
