@@ -199,7 +199,7 @@ class TestExportParsing:
         assert "Foo" not in unused_names
 
     def test_mixed_default_and_named_import_counts_as_used(self, tmp_path):
-        """import默认 + named should mark both as used."""
+        """Default + named should mark both as used."""
         mod = tmp_path / "mod.ts"
         mod.write_text('export function myFunc() { return 1; }\n')
         app = tmp_path / "app.ts"
@@ -211,6 +211,33 @@ class TestExportParsing:
         unused_names = {f.name for f in result.unused_exports}
         assert "myFunc" not in unused_names
         assert "Default" not in unused_names
+
+    def test_type_only_import_marks_as_used(self, tmp_path):
+        """`import { type Foo } from ...` should mark Foo as used."""
+        mod = tmp_path / "mod.ts"
+        mod.write_text('export type Foo = string;\n')
+        app = tmp_path / "app.ts"
+        app.write_text('import { type Foo } from "./mod";\nconst x: Foo = "hi";\n')
+
+        scanner = DeadCodeScanner(tmp_path)
+        result = scanner.scan()
+
+        unused_names = {f.name for f in result.unused_exports}
+        assert "Foo" not in unused_names
+
+    def test_mixed_default_and_type_only_import_marks_as_used(self, tmp_path):
+        """`import Default, { type Foo } from ...` should mark Foo as used."""
+        mod = tmp_path / "mod.ts"
+        mod.write_text('export default function Default() { return 1; }\nexport type Foo = string;\n')
+        app = tmp_path / "app.ts"
+        app.write_text('import Default, { type Foo } from "./mod";\nconst x: Foo = "hi";\n')
+
+        scanner = DeadCodeScanner(tmp_path)
+        result = scanner.scan()
+
+        unused_names = {f.name for f in result.unused_exports}
+        assert "Default" not in unused_names
+        assert "Foo" not in unused_names
 
 
 class TestCSSParsing:

@@ -323,7 +323,9 @@ class DeadCodeScanner:
                 names = [n.strip().split(" as ")[0].strip() for n in named_imports.split(",")]
                 for name in names:
                     if name:
-                        imports.setdefault(name, set()).add(rel_path)
+                        canonical = name[5:].strip() if name.startswith("type ") else name
+                        if canonical:
+                            imports.setdefault(canonical, set()).add(rel_path)
 
     def _parse_css_classes(
         self, content: str, rel_path: str, css_classes: dict[str, list[tuple[str, int]]]
