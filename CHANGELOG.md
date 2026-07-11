@@ -24,6 +24,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Beta badge and star CTA in README header
 - npm keywords optimized for discoverability (15 terms)
 
+### Fixed
+
+- Re-exported symbols are no longer reported as unused dead code. Barrel/index
+  files that forward exports (`export { X } from './mod'`, `export { X as Y } from
+  './mod'`, `export { type X } from './mod'`, and `export * from './mod'`) now mark
+  the forwarded symbols as used, preventing false-positive `removable` findings that
+  could delete live public API.
+
 ### Changed
 
 - npm package renamed for consistency

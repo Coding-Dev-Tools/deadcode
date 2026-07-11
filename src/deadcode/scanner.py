@@ -72,7 +72,10 @@ _EXPORT_PATTERN = re.compile(
 
 # export { name } — may span multiple lines; [^}] matches newlines too
 _EXPORT_LIST_PATTERN = re.compile(
-    r"export\s*\{([^}]+)\}",
+    # `(?!\s*from)` excludes re-export forwarding (`export { X } from '...'`),
+    # which is handled by _REEXPORT_PATTERN as a *use* of the source module's
+    # exports rather than a new local export definition.
+    r"export\s*\{([^}]+)\}(?!\s*from)",
     re.DOTALL,
 )
 
@@ -94,6 +97,15 @@ _CSS_CLASS_PATTERN = re.compile(
 # import statements (handles default, named, type-only, and mixed forms)
 _IMPORT_PATTERN = re.compile(
     r"import\s+(?:type\s+)?(?:(\w+))?\s*,?\s*(?:\{([^}]+)\})?\s*from\s+['\"]([^'\"]+)['\"]",
+)
+
+# Re-export forwarding: `export { A, B as C } from './mod'` and `export * from './mod'`.
+# A barrel/index file that re-exports a symbol is *consuming* it from the source
+# module, so the source's export must not be flagged as unused. `[^}]*` matches
+# newlines (with re.DOTALL) for multi-line re-export blocks.
+_REEXPORT_PATTERN = re.compile(
+    r"export\s*(?:\{([^}]*)\}|\*(?:\s+as\s+\w+)?)\s*from\s*['\"]([^'\"]+)['\"]",
+    re.DOTALL,
 )
 
 # className="..." or className={...} in JSX
@@ -168,6 +180,7 @@ class DeadCodeScanner:
         used_css_classes: set[str] = set()
         components: dict[str, str] = {}  # ComponentName -> file
         routes: list[tuple[str, str]] = []  # (route_path, file)
+        star_reexports: list[tuple[str, str]] = []  # (barrel_file, module_spec)
 
         for filepath in all_files:
             try:
@@ -183,6 +196,10 @@ class DeadCodeScanner:
 
             # Parse imports
             self._parse_imports(content, rel_path, imports)
+
+            # Parse re-exports (barrel/index forwarding) so re-exported symbols
+            # are counted as used and not reported as removable dead code.
+            self._parse_reexports(content, rel_path, imports, star_reexports)
 
             # Parse CSS classes (from .css/.scss/.module.css files)
             if self._is_css_file(rel_path):
@@ -203,8 +220,20 @@ class DeadCodeScanner:
 
         # Phase 2: Detect dead code
 
+        # Resolve `export * from './mod'` specifiers to scanned files so that
+        # every export forwarded by a barrel is treated as part of the public
+        # API surface (never reported as removable).
+        file_set = {
+            str(f.relative_to(self.project_dir)).replace("\\", "/") for f in all_files
+        }
+        star_reexported_files: set[str] = set()
+        for barrel_file, module_spec in star_reexports:
+            resolved = self._resolve_relative_module(barrel_file, module_spec, file_set)
+            if resolved:
+                star_reexported_files.add(resolved)
+
         # 2a. Unused exports
-        self._find_unused_exports(exports, imports, result)
+        self._find_unused_exports(exports, imports, result, star_reexported_files)
 
         # 2b. Dead routes
         self._find_dead_routes(routes, all_files, result)
@@ -315,7 +344,7 @@ class DeadCodeScanner:
         for m in _IMPORT_PATTERN.finditer(content):
             default_import = m.group(1)
             named_imports = m.group(2)
-            module_path = m.group(3)
+            # m.group(3) is the module specifier; imports are tracked by name only.
 
             if default_import:
                 imports.setdefault(default_import, set()).add(rel_path)
@@ -326,6 +355,66 @@ class DeadCodeScanner:
                         canonical = name[5:].strip() if name.startswith("type ") else name
                         if canonical:
                             imports.setdefault(canonical, set()).add(rel_path)
+
+    def _parse_reexports(
+        self,
+        content: str,
+        rel_path: str,
+        imports: dict[str, set[str]],
+        star_reexports: list[tuple[str, str]],
+    ) -> None:
+        """Record re-export forwarding so barrel/index files don't false-positive.
+
+        ``export { A, B as C } from './mod'`` consumes ``A`` and ``B`` from
+        ``./mod``; the consumed (left-hand) names are registered as imports of
+        this file so the source module's exports are not reported as unused.
+        ``export * from './mod'`` forwards every export of ``./mod``; the
+        (file, module) pair is recorded so those exports can be treated as used
+        once ``./mod`` is resolved to a scanned file.
+        """
+        for m in _REEXPORT_PATTERN.finditer(content):
+            named = m.group(1)
+            module_path = m.group(2)
+            if named is not None:
+                for entry in named.split(","):
+                    entry = entry.strip()
+                    if not entry:
+                        continue
+                    # `A as B` re-exports A (the left-hand source name) as B.
+                    source = entry.split(" as ")[0].strip()
+                    if source.startswith("type "):
+                        source = source[5:].strip()
+                    if source and re.match(r"^[A-Za-z_$][\w$]*$", source):
+                        imports.setdefault(source, set()).add(rel_path)
+            else:
+                # `export * from './mod'` — resolved to a file in phase 2.
+                star_reexports.append((rel_path, module_path))
+
+    @staticmethod
+    def _resolve_relative_module(
+        importer_rel: str, spec: str, file_set: set[str]
+    ) -> str | None:
+        """Resolve a relative module specifier to a scanned file's rel path.
+
+        Returns ``None`` for bare/package specifiers (e.g. ``'react'``) or when
+        no matching scanned file exists. Tries the literal path, then common
+        TS/JS extensions, then an ``index.*`` barrel inside a directory.
+        """
+        if not spec.startswith("."):
+            return None
+        base = os.path.dirname(importer_rel)
+        target = os.path.normpath(os.path.join(base, spec)).replace("\\", "/")
+        if target in file_set:
+            return target
+        exts = (".ts", ".tsx", ".js", ".jsx")
+        for e in exts:
+            if target + e in file_set:
+                return target + e
+        for e in exts:
+            candidate = f"{target}/index{e}"
+            if candidate in file_set:
+                return candidate
+        return None
 
     def _parse_css_classes(
         self, content: str, rel_path: str, css_classes: dict[str, list[tuple[str, int]]]
@@ -370,6 +459,7 @@ class DeadCodeScanner:
         exports: dict[str, list[tuple[str, int]]],
         imports: dict[str, set[str]],
         result: ScanResult,
+        star_reexported_files: set[str] | None = None,
     ) -> None:
         """Find exports that are never imported elsewhere."""
         # Special names that are entry points or conventions
@@ -379,8 +469,15 @@ class DeadCodeScanner:
             "loader", "action", "generateStaticParams",
         }
 
+        star_reexported_files = star_reexported_files or set()
+
         for name, locations in exports.items():
             if name in skip_names:
+                continue
+            # A symbol defined in a file that is `export *`-forwarded by a barrel
+            # is part of the public API surface and must not be reported as
+            # removable dead code.
+            if any(loc_file in star_reexported_files for loc_file, _ in locations):
                 continue
             # If imported by at least one other file, it's used
             importers = imports.get(name, set())

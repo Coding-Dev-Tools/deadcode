@@ -595,3 +595,120 @@ class TestScanFormat:
         result = runner.invoke(cli, ["-p", str(sample_project), "scan"])
         assert result.exit_code == 0
         assert "DeadCode Scan" in result.output
+
+
+class TestReexportForwarding:
+    """Re-exports (barrel/index files) must count the forwarded symbols as used.
+
+    A dead-code tool that flags re-exported symbols as removable is dangerous:
+    removing them breaks the barrel's public API. These tests pin the behaviour.
+    """
+
+    def test_named_reexport_marks_source_as_used(self, tmp_path):
+        src = tmp_path / "foo.ts"
+        src.write_text('export function helper() { return 1; }\n')
+        index = tmp_path / "index.ts"
+        index.write_text('export { helper } from "./foo";\n')
+
+        result = DeadCodeScanner(tmp_path).scan()
+
+        unused = {f.name for f in result.unused_exports}
+        assert "helper" not in unused
+
+    def test_renamed_reexport_marks_source_as_used(self, tmp_path):
+        src = tmp_path / "foo.ts"
+        src.write_text('export function helper() { return 1; }\n')
+        index = tmp_path / "index.ts"
+        index.write_text('export { helper as primaryHelper } from "./foo";\n')
+
+        result = DeadCodeScanner(tmp_path).scan()
+
+        unused = {f.name for f in result.unused_exports}
+        assert "helper" not in unused
+
+    def test_type_named_reexport_marks_source_as_used(self, tmp_path):
+        src = tmp_path / "types.ts"
+        src.write_text('export type Foo = string;\n')
+        index = tmp_path / "index.ts"
+        index.write_text('export { type Foo } from "./types";\n')
+
+        result = DeadCodeScanner(tmp_path).scan()
+
+        unused = {f.name for f in result.unused_exports}
+        assert "Foo" not in unused
+
+    def test_multiline_named_reexport(self, tmp_path):
+        src = tmp_path / "foo.ts"
+        src.write_text(
+            'export const alpha = 1;\n'
+            'export const beta = 2;\n'
+        )
+        index = tmp_path / "index.ts"
+        index.write_text(
+            'export {\n'
+            '  alpha,\n'
+            '  beta,\n'
+            '} from "./foo";\n'
+        )
+
+        result = DeadCodeScanner(tmp_path).scan()
+
+        unused = {f.name for f in result.unused_exports}
+        assert "alpha" not in unused
+        assert "beta" not in unused
+
+    def test_star_reexport_marks_all_source_exports_as_used(self, tmp_path):
+        src = tmp_path / "widgets.ts"
+        src.write_text(
+            'export function widgetA() {}\n'
+            'export function widgetB() {}\n'
+        )
+        index = tmp_path / "index.ts"
+        index.write_text('export * from "./widgets";\n')
+
+        result = DeadCodeScanner(tmp_path).scan()
+
+        unused = {f.name for f in result.unused_exports}
+        assert "widgetA" not in unused
+        assert "widgetB" not in unused
+
+    def test_star_reexport_from_directory_index(self, tmp_path):
+        mod = tmp_path / "widgets" / "index.ts"
+        mod.parent.mkdir(parents=True, exist_ok=True)
+        mod.write_text('export function widgetA() {}\n')
+        index = tmp_path / "index.ts"
+        index.write_text('export * from "./widgets";\n')
+
+        result = DeadCodeScanner(tmp_path).scan()
+
+        unused = {f.name for f in result.unused_exports}
+        assert "widgetA" not in unused
+
+    def test_local_export_list_still_reported_when_unused(self, tmp_path):
+        # Regression guard: a *local* `export { ... }` (no `from`) must still be
+        # tracked and flagged when unused — the re-export fix must not suppress it.
+        f = tmp_path / "test.ts"
+        f.write_text(
+            'const alpha = 1;\n'
+            'const beta = 2;\n'
+            'export { alpha, beta };\n'
+        )
+
+        result = DeadCodeScanner(tmp_path).scan()
+
+        unused = {f.name for f in result.unused_exports}
+        assert "alpha" in unused
+        assert "beta" in unused
+
+    def test_reexport_from_package_does_not_crash_or_falsely_mark(self, tmp_path):
+        # Re-export from a bare package specifier must be ignored for resolution.
+        src = tmp_path / "foo.ts"
+        src.write_text('export function localOnly() {}\n')
+        index = tmp_path / "index.ts"
+        index.write_text('export { useState } from "react";\n')
+
+        result = DeadCodeScanner(tmp_path).scan()
+
+        unused = {f.name for f in result.unused_exports}
+        # The project-local export nobody consumes is still correctly flagged.
+        assert "localOnly" in unused
