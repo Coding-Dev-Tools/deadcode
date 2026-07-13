@@ -1,4 +1,5 @@
 """pytest configuration — add project src to Python path."""
+
 import site
 import sys
 from pathlib import Path
