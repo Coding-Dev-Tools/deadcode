@@ -584,9 +584,9 @@ class TestPackagingQuality:
         from pathlib import Path
 
         try:
-            import tomllib  # Python >=3.11
-        except ModuleNotFoundError:
-            import tomli as tomllib  # Python 3.10 backport
+            import tomllib
+        except ModuleNotFoundError:  # Python 3.10 (requires-python >= 3.10)
+            import tomli as tomllib
 
         pyproject = Path(__file__).parent.parent / "pyproject.toml"
         with open(pyproject, "rb") as f:
@@ -604,9 +604,9 @@ class TestPackagingQuality:
         from pathlib import Path
 
         try:
-            import tomllib  # Python >=3.11
-        except ModuleNotFoundError:
-            import tomli as tomllib  # Python 3.10 backport
+            import tomllib
+        except ModuleNotFoundError:  # Python 3.10 (requires-python >= 3.10)
+            import tomli as tomllib
 
         pyproject = Path(__file__).parent.parent / "pyproject.toml"
         with open(pyproject, "rb") as f:
