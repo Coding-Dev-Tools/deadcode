@@ -95,8 +95,20 @@ _CSS_CLASS_PATTERN = re.compile(
 )
 
 # import statements
+# Handles: import {Foo} from ..., import Foo from ..., import type {Foo} from ...,
+#          import Default, {Named} from ..., import {type Foo} from ...
+# Groups: 1 = first named block content (e.g. "Foo, Bar"), 2 = default import name,
+#          3 = optional named block after comma default, 4 = module specifier
 _IMPORT_PATTERN = re.compile(
-    r"import\s+(?:\{([^}]+)\}|(\w+))\s+from\s+['\"]([^'\"]+)['\"]",
+    r"import\s+"
+    r"(?:type\s+)?"
+    r"(?:"
+    r"\{([^}]+)\}"  # group 1: named imports {Foo, type Bar}
+    r"|"
+    r"(\w+(?:\s+as\s+\w+)?)"  # group 2: default import (Foo or Foo as Bar)
+    r")"
+    r"(?:\s*,\s*\{([^}]+)\})?"  # group 3: optional named after default
+    r"\s+from\s+['\"]([^'\"]+)['\"]",
 )
 
 # Re-export forwarding: `export { A, B as C } from './mod'` and `export * from './mod'`.
@@ -140,9 +152,7 @@ class DeadCodeScanner:
         )
         self.include_spec = None
         if include_patterns:
-            self.include_spec = pathspec.PathSpec.from_lines(
-                "gitignore", include_patterns
-            )
+            self.include_spec = pathspec.PathSpec.from_lines("gitignore", include_patterns)
 
     @staticmethod
     def _default_ignore_patterns() -> list[str]:
@@ -223,9 +233,7 @@ class DeadCodeScanner:
         # Resolve `export * from './mod'` specifiers to scanned files so that
         # every export forwarded by a barrel is treated as part of the public
         # API surface (never reported as removable).
-        file_set = {
-            str(f.relative_to(self.project_dir)).replace("\\", "/") for f in all_files
-        }
+        file_set = {str(f.relative_to(self.project_dir)).replace("\\", "/") for f in all_files}
         star_reexported_files: set[str] = set()
         for barrel_file, module_spec in star_reexports:
             resolved = self._resolve_relative_module(barrel_file, module_spec, file_set)
@@ -256,21 +264,13 @@ class DeadCodeScanner:
 
             # Filter out ignored directories
             dirs[:] = [
-                d
-                for d in dirs
-                if not self.ignore_spec.match_file(
-                    f"{rel_root}/{d}/" if rel_root != "." else f"{d}/"
-                )
+                d for d in dirs if not self.ignore_spec.match_file(f"{rel_root}/{d}/" if rel_root != "." else f"{d}/")
             ]
 
             # Filter out non-included directories when include_spec is set
             if self.include_spec:
                 dirs[:] = [
-                    d
-                    for d in dirs
-                    if self.include_spec.match_file(
-                        f"{rel_root}/{d}/" if rel_root != "." else f"{d}/"
-                    )
+                    d for d in dirs if self.include_spec.match_file(f"{rel_root}/{d}/" if rel_root != "." else f"{d}/")
                 ]
 
             for fname in filenames:
@@ -305,9 +305,7 @@ class DeadCodeScanner:
     def _is_css_file(rel_path: str) -> bool:
         return rel_path.endswith((".css", ".scss", ".module.css"))
 
-    def _parse_exports(
-        self, content: str, rel_path: str, exports: dict[str, list[tuple[str, int]]]
-    ) -> None:
+    def _parse_exports(self, content: str, rel_path: str, exports: dict[str, list[tuple[str, int]]]) -> None:
         """Extract export names from a file.
 
         Handles both single-line forms::
@@ -343,25 +341,41 @@ class DeadCodeScanner:
                 if name and re.match(r"^[A-Za-z_$][\w$]*$", name):
                     exports.setdefault(name, []).append((rel_path, line_num))
 
-    def _parse_imports(
-        self, content: str, rel_path: str, imports: dict[str, set[str]]
-    ) -> None:
-        """Extract import names from a file."""
+    def _parse_imports(self, content: str, rel_path: str, imports: dict[str, set[str]]) -> None:
+        """Extract import names from a file.
+
+        Handles: named imports (group 1), default imports (group 2),
+        and optional trailing named block (group 3, e.g. ``import React, { Foo }``).
+        Named-block entries prefixed with ``type `` are stripped to the canonical name.
+        """
         for m in _IMPORT_PATTERN.finditer(content):
+            named_block = m.group(1)  # {Foo, Bar} content
+            default_name = m.group(2)  # React or type
+            named_block2 = m.group(3)  # optional second {Foo, Bar} after comma
 
-            default_import = m.group(1)
-            named_imports = m.group(2)
-            # m.group(3) is the module specifier; imports are tracked by name only.
+            # Process first named block (from direct {Foo} or import type {Foo})
+            if named_block:
+                for entry in named_block.split(","):
+                    name = entry.strip()
+                    if not name:
+                        continue
+                    canonical = name[5:].strip() if name.startswith("type ") else name
+                    if canonical:
+                        imports.setdefault(canonical, set()).add(rel_path)
 
-            if default_import:
-                imports.setdefault(default_import, set()).add(rel_path)
-            if named_imports:
-                names = [n.strip().split(" as ")[0].strip() for n in named_imports.split(",")]
-                for name in names:
-                    if name:
-                        canonical = name[5:].strip() if name.startswith("type ") else name
-                        if canonical:
-                            imports.setdefault(canonical, set()).add(rel_path)
+            # Process default import name (but skip bare "type" keyword)
+            if default_name and default_name != "type":
+                imports.setdefault(default_name, set()).add(rel_path)
+
+            # Process optional named block after comma (Default, {Foo})
+            if named_block2:
+                for entry in named_block2.split(","):
+                    name = entry.strip()
+                    if not name:
+                        continue
+                    canonical = name[5:].strip() if name.startswith("type ") else name
+                    if canonical:
+                        imports.setdefault(canonical, set()).add(rel_path)
 
     def _parse_reexports(
         self,
@@ -398,9 +412,7 @@ class DeadCodeScanner:
                 star_reexports.append((rel_path, module_path))
 
     @staticmethod
-    def _resolve_relative_module(
-        importer_rel: str, spec: str, file_set: set[str]
-    ) -> str | None:
+    def _resolve_relative_module(importer_rel: str, spec: str, file_set: set[str]) -> str | None:
         """Resolve a relative module specifier to a scanned file's rel path.
 
         Returns ``None`` for bare/package specifiers (e.g. ``'react'``) or when
@@ -423,10 +435,7 @@ class DeadCodeScanner:
                 return candidate
         return None
 
-
-    def _parse_css_classes(
-        self, content: str, rel_path: str, css_classes: dict[str, list[tuple[str, int]]]
-    ) -> None:
+    def _parse_css_classes(self, content: str, rel_path: str, css_classes: dict[str, list[tuple[str, int]]]) -> None:
         """Extract CSS class names defined in a stylesheet."""
         for i, line in enumerate(content.splitlines(), 1):
             for m in _CSS_CLASS_PATTERN.finditer(line):
@@ -441,9 +450,7 @@ class DeadCodeScanner:
                     for cls in group.split():
                         used_css_classes.add(cls)
 
-    def _parse_components(
-        self, content: str, rel_path: str, components: dict[str, str]
-    ) -> None:
+    def _parse_components(self, content: str, rel_path: str, components: dict[str, str]) -> None:
         """Extract React component definitions."""
         for m in _COMPONENT_PATTERN.finditer(content):
             name = m.group(1)
@@ -527,9 +534,7 @@ class DeadCodeScanner:
             return
 
         # Build set of all route paths referenced in links
-        link_pattern = re.compile(
-            r'(?:href|to|push|replace)\s*[=:]\s*["\'](/[^"\']*)["\']'
-        )
+        link_pattern = re.compile(r'(?:href|to|push|replace)\s*[=:]\s*["\'](/[^"\']*)["\']')
         referenced_routes: set[str] = set()
 
         for filepath in all_files:
