@@ -31,6 +31,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   './mod'`, `export { type X } from './mod'`, and `export * from './mod'`) now mark
   the forwarded symbols as used, preventing false-positive `removable` findings that
   could delete live public API.
+- CSS-module classes consumed via the object-accessor pattern
+  (`import styles from './x.module.css'; <div className={styles.card}>`) are now
+  treated as used. Previously every `*.module.css` class was falsely reported as
+  orphaned CSS and marked `removable=True`, risking deletion of live styles. Bracket
+  accessors (`styles['card-hover']`) are also recognized; non-module object access
+  (e.g. `util.foo`) is not over-matched.
 
 ### Changed
 
