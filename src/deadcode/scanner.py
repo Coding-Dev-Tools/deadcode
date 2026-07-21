@@ -132,6 +132,21 @@ _TSCONFIG_PATHS_PATTERN = re.compile(
     r'"([^"]+)"\s*:\s*\["([^"]+)"\]',
 )
 
+# CSS-module accessor usage, two forms::
+#   - dot:    `styles.card`        -> capture group 1 empty, full = "styles.card"
+#   - bracket: `styles['card-hover']` / `styles["card"]` -> capture group 1 = name
+# We deliberately match either form after a binding identifier so both
+# `styles.card` and `styles['card-hover']` register the class as used.
+_CSS_MODULE_USAGE_PATTERN = re.compile(
+    r"""\b\w+\.(?:_?[\w$]+)|(\w+)\[['"]([\w$-]+)['"]\]""",
+)
+
+# Detect a CSS-module import so we know which source-file class accessors
+# correspond to module classes (``import styles from './x.module.css'``).
+_CSS_MODULE_IMPORT_PATTERN = re.compile(
+    r"""import\s+(?:type\s+)?(\w+)\s+from\s+['"]([^'"]*\.module\.css)['"]""",
+)
+
 
 # ── Scanner ───────────────────────────────────────────────────────────
 
@@ -218,6 +233,11 @@ class DeadCodeScanner:
             # Parse className usage in TSX/JSX files
             if rel_path.endswith((".tsx", ".jsx")):
                 self._parse_classname_usage(content, used_css_classes)
+                # CSS-module accessor usage (styles.card / styles['card']).
+                # Only register accessors imported as a CSS module so we don't
+                # treat every object property access (e.g. `user.name`) as a
+                # CSS class.
+                self._parse_css_module_usage(content, used_css_classes)
 
             # Parse components
             if rel_path.endswith((".tsx", ".jsx")):
@@ -449,6 +469,42 @@ class DeadCodeScanner:
                 if group:
                     for cls in group.split():
                         used_css_classes.add(cls)
+
+    def _parse_css_module_usage(self, content: str, used_css_classes: set[str]) -> None:
+        """Extract CSS-module class names consumed via object accessors.
+
+        The canonical Next.js/React pattern is::
+
+            import styles from './Card.module.css';
+            <div className={styles.card}>...</div>
+
+        We first find any ``*.module.css`` imports (binding name ``styles``)
+        so that accessor use ``styles.card`` registers ``card`` as a used
+        class. Bracket access ``styles['card-hover']`` is also captured.
+        Without this, every CSS-module class is falsely reported as orphaned
+        and marked removable=True, risking deletion of live styles.
+        """
+        # Map the local binding (e.g. ``styles``) to a CSS-module import so
+        # only module accessors are treated as class names.
+        module_bindings = {m.group(1) for m in _CSS_MODULE_IMPORT_PATTERN.finditer(content)}
+        if not module_bindings:
+            return
+        for m in _CSS_MODULE_USAGE_PATTERN.finditer(content):
+            groups = m.groups()
+            # Bracket form `styles['card-hover']` -> groups = (binding, name).
+            # Dot form `styles.card` -> groups = (None, None); the whole match
+            # is "binding.attr". Distinguish by whether a bracket name exists.
+            bracket_binding, bracket_name = groups
+            if bracket_name is not None:
+                if bracket_binding in module_bindings:
+                    used_css_classes.add(bracket_name)
+                continue
+            # Dot form `styles.card` -> the whole match is "binding.attr".
+            full = m.group(0)
+            binding, _, attr = full.partition(".")
+            if binding in module_bindings and attr and attr[0] != "_":
+                # Skip internal/private-ish accessors (e.g. styles.toString).
+                used_css_classes.add(attr)
 
     def _parse_components(self, content: str, rel_path: str, components: dict[str, str]) -> None:
         """Extract React component definitions."""
