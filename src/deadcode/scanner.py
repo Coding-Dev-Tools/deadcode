@@ -141,12 +141,6 @@ _CSS_MODULE_USAGE_PATTERN = re.compile(
     r"""\b\w+\.(?:_?[\w$]+)|(\w+)\[['"]([\w$-]+)['"]\]""",
 )
 
-# DOM classList API: `el.classList.add('foo')` / `toggle('bar')` / `remove(...)`
-# / `contains('baz')`. Dynamic class names referenced here are real uses.
-_CLASSLIST_PATTERN = re.compile(
-    r"""classList\.(?:add|remove|toggle|contains)\(\s*['"]([\w$-]+)['"]""",
-)
-
 # Detect a CSS-module import so we know which source-file class accessors
 # correspond to module classes (``import styles from './x.module.css'``).
 _CSS_MODULE_IMPORT_PATTERN = re.compile(
