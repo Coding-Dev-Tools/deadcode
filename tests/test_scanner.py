@@ -1,0 +1,712 @@
+"""Tests for DeadCode scanner and CLI."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+
+from deadcode.cli import cli
+from deadcode.scanner import DeadCodeScanner
+
+
+@pytest.fixture
+def runner():
+    from click.testing import CliRunner
+
+    return CliRunner()
+
+
+@pytest.fixture
+def sample_project(tmp_path):
+    """Create a sample TS/React project structure."""
+    # src/utils.ts - with unused export
+    utils = tmp_path / "src" / "utils.ts"
+    utils.parent.mkdir(parents=True, exist_ok=True)
+    utils.write_text(
+        "export function usedHelper() { return 1; }\n"
+        "export function unusedHelper() { return 2; }\n"
+        'export const USED_CONST = "used";\n'
+        'export const UNUSED_CONST = "unused";\n'
+    )
+
+    # src/components/Button.tsx - component that imports from utils
+    button = tmp_path / "src" / "components" / "Button.tsx"
+    button.parent.mkdir(parents=True, exist_ok=True)
+    button.write_text(
+        'import { usedHelper, USED_CONST } from "../utils";\n'
+        "export function Button() {\n"
+        '  return <button className="btn-primary">{usedHelper()}</button>;\n'
+        "}\n"
+    )
+
+    # src/components/UnusedWidget.tsx - never imported
+    widget = tmp_path / "src" / "components" / "UnusedWidget.tsx"
+    widget.write_text("export function UnusedWidget() {\n  return <div>Unused</div>;\n}\n")
+
+    # src/styles/main.css - with orphaned class
+    css = tmp_path / "src" / "styles" / "main.css"
+    css.parent.mkdir(parents=True, exist_ok=True)
+    css.write_text(".btn-primary {\n  background: blue;\n}\n.orphaned-class {\n  color: red;\n}\n")
+
+    # src/app/page.tsx - Next.js page (entry point)
+    page = tmp_path / "src" / "app" / "page.tsx"
+    page.parent.mkdir(parents=True, exist_ok=True)
+    page.write_text(
+        'import { Button } from "../components/Button";\nexport default function Page() {\n  return <Button />;\n}\n'
+    )
+
+    # src/app/deadpage/page.tsx - dead route
+    deadpage = tmp_path / "src" / "app" / "deadpage" / "page.tsx"
+    deadpage.parent.mkdir(parents=True, exist_ok=True)
+    deadpage.write_text("export default function DeadPage() {\n  return <div>Dead</div>;\n}\n")
+
+    return tmp_path
+
+
+class TestScanner:
+    def test_scan_finds_unused_exports(self, sample_project):
+        scanner = DeadCodeScanner(sample_project)
+        result = scanner.scan()
+
+        unused_names = {f.name for f in result.unused_exports}
+        assert "unusedHelper" in unused_names
+        assert "UNUSED_CONST" in unused_names
+        assert "usedHelper" not in unused_names
+        assert "USED_CONST" not in unused_names
+
+    def test_scan_finds_orphaned_css(self, sample_project):
+        scanner = DeadCodeScanner(sample_project)
+        result = scanner.scan()
+
+        orphaned_names = {f.name for f in result.orphaned_css}
+        assert "orphaned-class" in orphaned_names
+        assert "btn-primary" not in orphaned_names
+
+    def test_scan_finds_unreferenced_components(self, sample_project):
+        scanner = DeadCodeScanner(sample_project)
+        result = scanner.scan()
+
+        comp_names = {f.name for f in result.unreferenced_components}
+        assert "UnusedWidget" in comp_names
+        assert "Button" not in comp_names
+
+    def test_scan_finds_dead_routes(self, sample_project):
+        scanner = DeadCodeScanner(sample_project)
+        result = scanner.scan()
+
+        route_names = {f.name for f in result.dead_routes}
+        assert "/deadpage" in route_names
+
+    def test_scan_files_counted(self, sample_project):
+        scanner = DeadCodeScanner(sample_project)
+        result = scanner.scan()
+        assert result.files_scanned > 0
+
+    def test_empty_project(self, tmp_path):
+        scanner = DeadCodeScanner(tmp_path)
+        result = scanner.scan()
+        assert result.files_scanned == 0
+        assert len(result.findings) == 0
+
+    def test_ignore_patterns(self, sample_project):
+        scanner = DeadCodeScanner(sample_project, ignore_patterns=["src/styles/"])
+        result = scanner.scan()
+        # Orphaned CSS should not appear since we're ignoring styles dir
+        assert len(result.orphaned_css) == 0
+
+    def test_scan_result_properties(self, sample_project):
+        scanner = DeadCodeScanner(sample_project)
+        result = scanner.scan()
+        # Verify all findings are categorized
+        for f in result.findings:
+            assert f.category in (
+                "unused_export",
+                "dead_route",
+                "orphaned_css",
+                "unreferenced_component",
+            )
+
+
+class TestExportParsing:
+    def test_named_exports(self, tmp_path):
+        f = tmp_path / "test.ts"
+        f.write_text(
+            "export function foo() {}\nexport const bar = 1;\nexport type Baz = string;\nexport interface Qux {}\n"
+        )
+        scanner = DeadCodeScanner(tmp_path)
+        result = scanner.scan()
+
+        export_names = {f.name for f in result.unused_exports}
+        assert "foo" in export_names
+        assert "bar" in export_names
+        assert "Baz" in export_names
+        assert "Qux" in export_names
+
+    def test_export_list(self, tmp_path):
+        f = tmp_path / "test.ts"
+        f.write_text("const alpha = 1;\nconst beta = 2;\nexport { alpha, beta };\n")
+        scanner = DeadCodeScanner(tmp_path)
+        result = scanner.scan()
+
+        export_names = {f.name for f in result.unused_exports}
+        assert "alpha" in export_names
+        assert "beta" in export_names
+
+    def test_used_exports_not_reported(self, tmp_path):
+        mod = tmp_path / "mod.ts"
+        mod.write_text("export function myFunc() { return 1; }\n")
+        app = tmp_path / "app.ts"
+        app.write_text('import { myFunc } from "./mod";\nmyFunc();\n')
+
+        scanner = DeadCodeScanner(tmp_path)
+        result = scanner.scan()
+
+        unused_names = {f.name for f in result.unused_exports}
+        assert "myFunc" not in unused_names
+
+    def test_type_import_counts_as_used(self, tmp_path):
+        """import type { Foo } should mark Foo as used."""
+        mod = tmp_path / "mod.ts"
+        mod.write_text("export type Foo = string;\n")
+        app = tmp_path / "app.ts"
+        app.write_text('import type { Foo } from "./mod";\nconst x: Foo = "hello";\n')
+
+        scanner = DeadCodeScanner(tmp_path)
+        result = scanner.scan()
+
+        unused_names = {f.name for f in result.unused_exports}
+        assert "Foo" not in unused_names
+
+    def test_mixed_default_and_named_import_counts_as_used(self, tmp_path):
+        """Default + named should mark both as used."""
+        mod = tmp_path / "mod.ts"
+        mod.write_text("export function myFunc() { return 1; }\n")
+        app = tmp_path / "app.ts"
+        app.write_text('import Default, { myFunc } from "./mod";\nmyFunc();\n')
+
+        scanner = DeadCodeScanner(tmp_path)
+        result = scanner.scan()
+
+        unused_names = {f.name for f in result.unused_exports}
+        assert "myFunc" not in unused_names
+        assert "Default" not in unused_names
+
+    def test_type_only_import_marks_as_used(self, tmp_path):
+        """`import { type Foo } from ...` should mark Foo as used."""
+        mod = tmp_path / "mod.ts"
+        mod.write_text("export type Foo = string;\n")
+        app = tmp_path / "app.ts"
+        app.write_text('import { type Foo } from "./mod";\nconst x: Foo = "hi";\n')
+
+        scanner = DeadCodeScanner(tmp_path)
+        result = scanner.scan()
+
+        unused_names = {f.name for f in result.unused_exports}
+        assert "Foo" not in unused_names
+
+    def test_mixed_default_and_type_only_import_marks_as_used(self, tmp_path):
+        """`import Default, { type Foo } from ...` should mark Foo as used."""
+        mod = tmp_path / "mod.ts"
+        mod.write_text("export default function Default() { return 1; }\nexport type Foo = string;\n")
+        app = tmp_path / "app.ts"
+        app.write_text('import Default, { type Foo } from "./mod";\nconst x: Foo = "hi";\n')
+
+        scanner = DeadCodeScanner(tmp_path)
+        result = scanner.scan()
+
+        unused_names = {f.name for f in result.unused_exports}
+        assert "Default" not in unused_names
+        assert "Foo" not in unused_names
+
+
+class TestCSSParsing:
+    def test_orphaned_css_detection(self, tmp_path):
+        css = tmp_path / "styles.css"
+        css.write_text(".used-class { color: blue; }\n.orphaned-class { color: red; }\n")
+        component = tmp_path / "Component.tsx"
+        component.write_text('export function Component() {\n  return <div className="used-class">Hi</div>;\n}\n')
+
+        scanner = DeadCodeScanner(tmp_path)
+        result = scanner.scan()
+
+        orphaned = {f.name for f in result.orphaned_css}
+        assert "orphaned-class" in orphaned
+        assert "used-class" not in orphaned
+
+
+class TestCSSModuleUsage:
+    """CSS-module class accessors (``styles.card``) must count as uses.
+
+    Regression coverage for a bug where every ``*.module.css`` class was
+    falsely reported as orphaned (and removable=True), risking deletion of
+    live styles consumed via the object-accessor pattern.
+    """
+
+    def test_module_accessor_used_not_orphaned(self, tmp_path):
+        css = tmp_path / "Card.module.css"
+        css.write_text(".card { color: red; }\n.unusedClass { color: blue; }\n")
+        component = tmp_path / "Card.tsx"
+        component.write_text(
+            "import styles from './Card.module.css';\n"
+            "export function Card() { return <div className={styles.card}>hi</div>; }\n"
+        )
+
+        result = DeadCodeScanner(tmp_path).scan()
+        orphaned = {f.name for f in result.orphaned_css}
+        assert "card" not in orphaned
+        assert "unusedClass" in orphaned
+
+    def test_module_bracket_accessor(self, tmp_path):
+        css = tmp_path / "M.module.css"
+        css.write_text(".card-hover { } .orphan { }\n")
+        component = tmp_path / "M.tsx"
+        component.write_text(
+            "import s from './M.module.css';\nexport const X = () => <div className={s['card-hover']} />;\n"
+        )
+
+        result = DeadCodeScanner(tmp_path).scan()
+        orphaned = {f.name for f in result.orphaned_css}
+        assert "card-hover" not in orphaned
+        assert "orphan" in orphaned
+
+    def test_non_module_object_access_not_counted(self, tmp_path):
+        # `util.foo` where util is NOT a *.module.css import must not be
+        # treated as a CSS-module class use (guards against over-matching).
+        css = tmp_path / "M.module.css"
+        css.write_text(".secret { }\n")
+        component = tmp_path / "M.tsx"
+        component.write_text("import util from './util';\nexport const X = () => <div className={util.secret} />;\n")
+
+        result = DeadCodeScanner(tmp_path).scan()
+        orphaned = {f.name for f in result.orphaned_css}
+        assert "secret" in orphaned
+
+
+class TestRouteDetection:
+    def test_nextjs_app_router_route(self, tmp_path):
+        page = tmp_path / "app" / "about" / "page.tsx"
+        page.parent.mkdir(parents=True, exist_ok=True)
+        page.write_text("export default function About() { return <div>About</div>; }\n")
+
+        scanner = DeadCodeScanner(tmp_path)
+        result = scanner.scan()
+
+        route_names = {f.name for f in result.dead_routes}
+        assert "/about" in route_names
+
+    def test_root_route_not_dead(self, tmp_path):
+        page = tmp_path / "app" / "page.tsx"
+        page.parent.mkdir(parents=True, exist_ok=True)
+        page.write_text("export default function Home() { return <div>Home</div>; }\n")
+
+        scanner = DeadCodeScanner(tmp_path)
+        result = scanner.scan()
+
+        # Root route should not be reported as dead
+        route_names = {f.name for f in result.dead_routes}
+        assert "/" not in route_names
+
+    def test_linked_route_not_dead(self, tmp_path):
+        page = tmp_path / "app" / "page.tsx"
+        page.parent.mkdir(parents=True, exist_ok=True)
+        page.write_text('export default function Home() { return <a href="/about">About</a>; }\n')
+        about = tmp_path / "app" / "about" / "page.tsx"
+        about.parent.mkdir(parents=True, exist_ok=True)
+        about.write_text("export default function About() { return <div>About</div>; }\n")
+
+        scanner = DeadCodeScanner(tmp_path)
+        result = scanner.scan()
+
+        route_names = {f.name for f in result.dead_routes}
+        assert "/about" not in route_names
+
+
+class TestCLIIntegration:
+    def test_version(self, runner):
+        result = runner.invoke(cli, ["--version"])
+        assert result.exit_code == 0
+        assert "0.1.1" in result.output
+
+    def test_help(self, runner):
+        result = runner.invoke(cli, ["--help"])
+        assert result.exit_code == 0
+        assert "scan" in result.output
+        assert "remove" in result.output
+        assert "stats" in result.output
+
+    def test_scan_command(self, runner, sample_project):
+        result = runner.invoke(cli, ["-p", str(sample_project), "scan"])
+        assert result.exit_code == 0
+        assert "DeadCode Scan" in result.output
+
+    def test_scan_json_output(self, runner, sample_project):
+        result = runner.invoke(cli, ["-p", str(sample_project), "scan", "--json-output"])
+        assert result.exit_code == 0
+        data = json.loads(result.output, strict=False)
+        assert "findings" in data
+        assert "files_scanned" in data
+
+    def test_scan_category_filter(self, runner, sample_project):
+        result = runner.invoke(cli, ["-p", str(sample_project), "scan", "-c", "orphaned_css"])
+        assert result.exit_code == 0
+        # Text output should mention the category
+        assert "Orphaned CSS" in result.output
+
+    def test_scan_nonexistent_dir(self, runner):
+        result = runner.invoke(cli, ["-p", "/nonexistent/path", "scan"])
+        assert result.exit_code != 0
+
+    def test_remove_dry_run(self, runner, sample_project):
+        result = runner.invoke(cli, ["-p", str(sample_project), "remove", "--dry-run"])
+        assert result.exit_code == 0
+        assert "WOULD REMOVE" in result.output or "Nothing removable" in result.output or result.exit_code == 0
+
+    def test_stats_command(self, runner, sample_project):
+        result = runner.invoke(cli, ["-p", str(sample_project), "stats"])
+        assert result.exit_code == 0
+        assert "Files scanned" in result.output
+        assert "Unused exports" in result.output
+
+    def test_scan_ignore_option(self, runner, tmp_path):
+        """--ignore option should exclude matching files from scan."""
+        mod = tmp_path / "src" / "mod.ts"
+        mod.parent.mkdir(parents=True, exist_ok=True)
+        mod.write_text("export function unusedFunc() { return 1; }\n")
+
+        result = runner.invoke(cli, ["-p", str(tmp_path), "-i", "src/", "scan", "--json-output"])
+        assert result.exit_code == 0
+        import json
+
+        data = json.loads(result.output, strict=False)
+        assert data["files_scanned"] == 0, "src/ ignored, should have 0 files"
+
+    def test_remove_category_filter(self, runner, sample_project):
+        """remove --dry-run --category should filter by category."""
+        result = runner.invoke(
+            cli,
+            ["-p", str(sample_project), "remove", "--dry-run", "-c", "orphaned_css"],
+        )
+        assert result.exit_code == 0
+        # Should mention orphaned class
+        assert "orphaned-class" in result.output or "Nothing removable" in result.output
+
+    def test_remove_nonexistent_dir(self, runner):
+        """remove should give graceful error for nonexistent project dir."""
+        result = runner.invoke(cli, ["-p", "/nonexistent/test/path", "remove", "--dry-run"])
+        assert result.exit_code != 0
+        assert "not found" in result.output
+
+    def test_stats_nonexistent_dir(self, runner):
+        """stats should handle nonexistent project dir gracefully."""
+        result = runner.invoke(cli, ["-p", "/nonexistent/stats/path", "stats"])
+        # Should not crash — scan returns 0 files for nonexistent dir
+        assert result.exit_code == 0
+        assert "Files scanned: 0" in result.output
+
+    def test_main_module_entry_point(self, runner):
+        """Test that python -m deadcode works (__main__ entry point fix)."""
+        import subprocess
+        import sys
+
+        result = subprocess.run(
+            [sys.executable, "-m", "deadcode", "--help"],
+            capture_output=True,
+            text=True,
+            cwd=str(Path(__file__).parent.parent / "src"),
+        )
+        assert result.returncode == 0
+        assert "DeadCode" in result.stdout
+        assert "scan" in result.stdout
+        assert "remove" in result.stdout
+        assert "stats" in result.stdout
+
+
+class TestMultiLineExportList:
+    """Tests for multi-line export { } blocks (scanner.py fix: apply list pattern to full content)."""
+
+    def test_multiline_export_list_detected(self, tmp_path):
+        """export { Foo, Bar } split across lines should be detected as unused exports."""
+        mod = tmp_path / "src" / "mod.ts"
+        mod.parent.mkdir(parents=True, exist_ok=True)
+        mod.write_text(
+            "function Alpha() { return 1; }\nfunction Beta() { return 2; }\nexport {\n  Alpha,\n  Beta,\n}\n"
+        )
+
+        scanner = DeadCodeScanner(tmp_path)
+        result = scanner.scan()
+
+        export_names = {f.name for f in result.unused_exports}
+        assert "Alpha" in export_names, "Multi-line export Alpha should be detected"
+        assert "Beta" in export_names, "Multi-line export Beta should be detected"
+
+    def test_multiline_export_list_used_not_reported(self, tmp_path):
+        """Names from a multi-line export {} that are imported elsewhere should NOT be reported."""
+        mod = tmp_path / "src" / "mod.ts"
+        mod.parent.mkdir(parents=True, exist_ok=True)
+        mod.write_text(
+            "export function usedInApp() { return 1; }\n"
+            "export function alsoUnused() { return 2; }\n"
+            "export {\n"
+            "  usedInApp,\n"
+            "}\n"
+        )
+        app = tmp_path / "src" / "app.ts"
+        app.write_text('import { usedInApp } from "./mod";\nusedInApp();\n')
+
+        scanner = DeadCodeScanner(tmp_path)
+        result = scanner.scan()
+
+        export_names = {f.name for f in result.unused_exports}
+        # usedInApp appears in both an inline export and the export-list; it's imported so should be absent
+        assert "usedInApp" not in export_names, "usedInApp is imported — should not be reported"
+        assert "alsoUnused" in export_names, "alsoUnused is never imported — should be reported"
+
+    def test_multiline_export_list_with_aliases(self, tmp_path):
+        """export { Foo as Bar } aliases: the local name Foo should be tracked, not the alias."""
+        mod = tmp_path / "src" / "mod.ts"
+        mod.parent.mkdir(parents=True, exist_ok=True)
+        mod.write_text("function InternalName() { return 1; }\nexport {\n  InternalName as PublicName,\n}\n")
+
+        scanner = DeadCodeScanner(tmp_path)
+        result = scanner.scan()
+
+        export_names = {f.name for f in result.unused_exports}
+        # The scanner tracks the local (pre-alias) name
+        assert "InternalName" in export_names
+        # The alias 'PublicName' should not appear as a spurious finding
+        assert "PublicName" not in export_names
+
+    def test_single_line_export_list_still_works(self, tmp_path):
+        """Single-line export { Foo, Bar } should continue to work after the fix."""
+        mod = tmp_path / "src" / "mod.ts"
+        mod.parent.mkdir(parents=True, exist_ok=True)
+        mod.write_text("const alpha = 1;\nconst beta = 2;\nexport { alpha, beta };\n")
+
+        scanner = DeadCodeScanner(tmp_path)
+        result = scanner.scan()
+
+        export_names = {f.name for f in result.unused_exports}
+        assert "alpha" in export_names
+        assert "beta" in export_names
+
+    def test_export_list_with_inline_comments(self, tmp_path):
+        """Inline // comments inside export lists should not mask other exports."""
+        mod = tmp_path / "src" / "mod.ts"
+        mod.parent.mkdir(parents=True, exist_ok=True)
+        mod.write_text(
+            "function Alpha() { return 1; }\n"
+            "function Beta() { return 2; }\n"
+            "export {\n"
+            "  Alpha, // kept for clarity\n"
+            "  Beta,\n"
+            "}\n"
+        )
+
+        scanner = DeadCodeScanner(tmp_path)
+        result = scanner.scan()
+
+        export_names = {f.name for f in result.unused_exports}
+        assert "Alpha" in export_names
+        assert "Beta" in export_names
+
+
+class TestIncludePatterns:
+    """Tests for the include_patterns scanner feature."""
+
+    def test_include_patterns_filters_files(self, tmp_path):
+        """When include_patterns is set, only matching files should be scanned."""
+        # Create files in two dirs
+        mod = tmp_path / "src" / "mod.ts"
+        mod.parent.mkdir(parents=True, exist_ok=True)
+        mod.write_text("export function foo() { return 1; }\\n")
+
+        lib = tmp_path / "lib" / "helper.ts"
+        lib.parent.mkdir(parents=True, exist_ok=True)
+        lib.write_text("export function bar() { return 2; }\\n")
+
+        scanner = DeadCodeScanner(tmp_path, include_patterns=["src/"])
+        result = scanner.scan()
+
+        # Only src/mod.ts should be scanned, not lib/helper.ts
+        assert result.files_scanned == 1
+
+    def test_include_patterns_allows_multiple(self, tmp_path):
+        """include_patterns can specify multiple directories."""
+        mod = tmp_path / "src" / "mod.ts"
+        mod.parent.mkdir(parents=True, exist_ok=True)
+        mod.write_text("export function foo() { return 1; }\\n")
+
+        lib = tmp_path / "lib" / "helper.ts"
+        lib.parent.mkdir(parents=True, exist_ok=True)
+        lib.write_text("export function bar() { return 2; }\\n")
+
+        scanner = DeadCodeScanner(tmp_path, include_patterns=["src/", "lib/"])
+        result = scanner.scan()
+        assert result.files_scanned == 2
+
+    def test_include_patterns_none_scans_all(self, tmp_path):
+        """When include_patterns is None, all scannable files are included."""
+        mod = tmp_path / "src" / "mod.ts"
+        mod.parent.mkdir(parents=True, exist_ok=True)
+        mod.write_text("export function foo() { return 1; }\\n")
+
+        lib = tmp_path / "lib" / "helper.ts"
+        lib.parent.mkdir(parents=True, exist_ok=True)
+        lib.write_text("export function bar() { return 2; }\\n")
+
+        scanner = DeadCodeScanner(tmp_path)
+        result = scanner.scan()
+        assert result.files_scanned == 2
+
+
+class TestScanFormat:
+    """Tests for the new --format scan option."""
+
+    def test_format_compact(self, runner, sample_project):
+        result = runner.invoke(cli, ["-p", str(sample_project), "scan", "--format=compact"])
+        assert result.exit_code == 0
+
+    def test_format_github(self, runner, sample_project):
+        result = runner.invoke(cli, ["-p", str(sample_project), "scan", "--format=github"])
+        assert result.exit_code == 0
+
+    def test_format_compact_with_findings(self, runner, sample_project):
+        result = runner.invoke(cli, ["-p", str(sample_project), "scan", "--format=compact"])
+        assert result.exit_code == 0
+        assert "unusedHelper" in result.output or "No dead code" in result.output
+
+    def test_format_github_with_findings(self, runner, sample_project):
+        result = runner.invoke(cli, ["-p", str(sample_project), "scan", "--format=github"])
+        assert result.exit_code == 0
+        assert "::" in result.output or "No dead code" in result.output
+
+    def test_format_json_legacy_alias(self, runner, sample_project):
+        result = runner.invoke(cli, ["-p", str(sample_project), "scan", "--json-output"])
+        assert result.exit_code == 0
+        data = json.loads(result.output, strict=False)
+        assert "findings" in data
+
+    def test_format_json_explicit(self, runner, sample_project):
+        result = runner.invoke(cli, ["-p", str(sample_project), "scan", "--format=json"])
+        assert result.exit_code == 0
+        data = json.loads(result.output, strict=False)
+        assert "findings" in data
+
+    def test_format_compact_empty(self, runner, tmp_path):
+        result = runner.invoke(cli, ["-p", str(tmp_path), "scan", "--format=compact"])
+        assert result.exit_code == 0
+        assert "OK \u2014 0 findings" in result.output
+
+    def test_format_github_empty(self, runner, tmp_path):
+        result = runner.invoke(cli, ["-p", str(tmp_path), "scan", "--format=github"])
+        assert result.exit_code == 0
+        assert "deadcode: 0 findings" in result.output
+
+    def test_format_pretty_default(self, runner, sample_project):
+        result = runner.invoke(cli, ["-p", str(sample_project), "scan"])
+        assert result.exit_code == 0
+        assert "DeadCode Scan" in result.output
+
+
+class TestReexportForwarding:
+    """Re-exports (barrel/index files) must count the forwarded symbols as used.
+
+    A dead-code tool that flags re-exported symbols as removable is dangerous:
+    removing them breaks the barrel's public API. These tests pin the behaviour.
+    """
+
+    def test_named_reexport_marks_source_as_used(self, tmp_path):
+        src = tmp_path / "foo.ts"
+        src.write_text("export function helper() { return 1; }\n")
+        index = tmp_path / "index.ts"
+        index.write_text('export { helper } from "./foo";\n')
+
+        result = DeadCodeScanner(tmp_path).scan()
+
+        unused = {f.name for f in result.unused_exports}
+        assert "helper" not in unused
+
+    def test_renamed_reexport_marks_source_as_used(self, tmp_path):
+        src = tmp_path / "foo.ts"
+        src.write_text("export function helper() { return 1; }\n")
+        index = tmp_path / "index.ts"
+        index.write_text('export { helper as primaryHelper } from "./foo";\n')
+
+        result = DeadCodeScanner(tmp_path).scan()
+
+        unused = {f.name for f in result.unused_exports}
+        assert "helper" not in unused
+
+    def test_type_named_reexport_marks_source_as_used(self, tmp_path):
+        src = tmp_path / "types.ts"
+        src.write_text("export type Foo = string;\n")
+        index = tmp_path / "index.ts"
+        index.write_text('export { type Foo } from "./types";\n')
+
+        result = DeadCodeScanner(tmp_path).scan()
+
+        unused = {f.name for f in result.unused_exports}
+        assert "Foo" not in unused
+
+    def test_multiline_named_reexport(self, tmp_path):
+        src = tmp_path / "foo.ts"
+        src.write_text("export const alpha = 1;\nexport const beta = 2;\n")
+        index = tmp_path / "index.ts"
+        index.write_text('export {\n  alpha,\n  beta,\n} from "./foo";\n')
+
+        result = DeadCodeScanner(tmp_path).scan()
+
+        unused = {f.name for f in result.unused_exports}
+        assert "alpha" not in unused
+        assert "beta" not in unused
+
+    def test_star_reexport_marks_all_source_exports_as_used(self, tmp_path):
+        src = tmp_path / "widgets.ts"
+        src.write_text("export function widgetA() {}\nexport function widgetB() {}\n")
+        index = tmp_path / "index.ts"
+        index.write_text('export * from "./widgets";\n')
+
+        result = DeadCodeScanner(tmp_path).scan()
+
+        unused = {f.name for f in result.unused_exports}
+        assert "widgetA" not in unused
+        assert "widgetB" not in unused
+
+    def test_star_reexport_from_directory_index(self, tmp_path):
+        mod = tmp_path / "widgets" / "index.ts"
+        mod.parent.mkdir(parents=True, exist_ok=True)
+        mod.write_text("export function widgetA() {}\n")
+        index = tmp_path / "index.ts"
+        index.write_text('export * from "./widgets";\n')
+
+        result = DeadCodeScanner(tmp_path).scan()
+
+        unused = {f.name for f in result.unused_exports}
+        assert "widgetA" not in unused
+
+    def test_local_export_list_still_reported_when_unused(self, tmp_path):
+        # Regression guard: a *local* `export { ... }` (no `from`) must still be
+        # tracked and flagged when unused — the re-export fix must not suppress it.
+        f = tmp_path / "test.ts"
+        f.write_text("const alpha = 1;\nconst beta = 2;\nexport { alpha, beta };\n")
+
+        result = DeadCodeScanner(tmp_path).scan()
+
+        unused = {f.name for f in result.unused_exports}
+        assert "alpha" in unused
+        assert "beta" in unused
+
+    def test_reexport_from_package_does_not_crash_or_falsely_mark(self, tmp_path):
+        # Re-export from a bare package specifier must be ignored for resolution.
+        src = tmp_path / "foo.ts"
+        src.write_text("export function localOnly() {}\n")
+        index = tmp_path / "index.ts"
+        index.write_text('export { useState } from "react";\n')
+
+        result = DeadCodeScanner(tmp_path).scan()
+
+        unused = {f.name for f in result.unused_exports}
+        # The project-local export nobody consumes is still correctly flagged.
+        assert "localOnly" in unused

@@ -1,0 +1,72 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "deadcode-cli"
+version = "0.1.1"
+description = "CLI tool to detect and auto-remove unused exports, dead routes, orphaned CSS in TS/React/Next.js projects"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [{name = "Coding-Dev-Tools"}]
+keywords = ["dead-code", "unused-exports", "typescript", "react", "nextjs", "cli", "css", "tree-shaking"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Topic :: Software Development :: Quality Assurance",
+    "Topic :: Software Development :: Testing",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+dependencies = [
+    "click>=8.1.0",
+    "rich>=15.0.0",
+    "pathspec>=0.11.0",
+    "pyyaml>=6.0.3",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "ruff>=0.4.0",
+    "tomli>=1.1.0; python_version < '3.11'",
+]
+
+[project.urls]
+Homepage = "https://github.com/Coding-Dev-Tools/deadcode"
+Documentation = "https://coding-dev-tools.github.io/deadcode"
+Repository = "https://github.com/Coding-Dev-Tools/deadcode"
+Issues = "https://github.com/Coding-Dev-Tools/deadcode/issues"
+Changelog = "https://github.com/Coding-Dev-Tools/deadcode/releases"
+
+[project.scripts]
+deadcode = "deadcode.cli:cli"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+deadcode = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM"]
+ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["deadcode"]

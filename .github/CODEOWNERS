@@ -1,0 +1,25 @@
+# Code Owners for DeadCode repository
+# These individuals/teams are automatically requested for review on PRs
+
+# Global owners
+* @Coding-Dev-Tools/engineers
+
+# Python package
+src/deadcode/ @Coding-Dev-Tools/engineers
+
+# Tests
+tests/ @Coding-Dev-Tools/engineers
+
+# CI/CD workflows
+.github/workflows/ @Coding-Dev-Tools/engineers
+
+# Documentation
+README.md @Coding-Dev-Tools/marketing
+CHANGELOG.md @Coding-Dev-Tools/marketing
+CONTRIBUTING.md @Coding-Dev-Tools/engineers
+SECURITY.md @Coding-Dev-Tools/engineers
+AGENTS.md @Coding-Dev-Tools/engineers
+
+# Configuration
+pyproject.toml @Coding-Dev-Tools/engineers
+.deadcode.yml @Coding-Dev-Tools/engineers
