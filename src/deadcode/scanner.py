@@ -136,6 +136,15 @@ _SIDE_EFFECT_IMPORT_PATTERN = re.compile(
     r"^\s*import\s*['\"]([^'\"]+)['\"]", re.MULTILINE
 )
 
+# Dynamic import: `const m = await import('./heavy');` — lazily loads the whole
+# module at runtime; individual consumed names are invisible statically, so the
+# module's entire export surface counts as used.
+_DYNAMIC_IMPORT_PATTERN = re.compile(r"import\(\s*['\"]([^'\"]+)['\"]\s*\)")
+
+# CommonJS require: `const m = require('./legacy');` — same whole-module
+# consumption semantics as a dynamic import.
+_REQUIRE_PATTERN = re.compile(r"(?<![\w$.])require\(\s*['\"]([^'\"]+)['\"]\s*\)")
+
 # className="..." or className={...} in JSX
 _CLASSNAME_PATTERN = re.compile(
     r"class(?:Name)?\s*[=:]\s*['\"]([^'\"]+)['\"]|"
@@ -454,6 +463,11 @@ class DeadCodeScanner:
         for m in _SIDE_EFFECT_IMPORT_PATTERN.finditer(content):
             # `import './mod'` — side-effect-only consumption.
             star_reexports.append((rel_path, m.group(1)))
+        for pattern in (_DYNAMIC_IMPORT_PATTERN, _REQUIRE_PATTERN):
+            for m in pattern.finditer(content):
+                # `import('./mod')` / `require('./mod')` — lazily loads the
+                # whole module; consumed names are invisible statically.
+                star_reexports.append((rel_path, m.group(1)))
 
     @staticmethod
     def _resolve_relative_module(importer_rel: str, spec: str, file_set: set[str]) -> str | None:

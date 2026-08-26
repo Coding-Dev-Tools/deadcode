@@ -78,3 +78,34 @@ class TestSideEffectImports:
         flagged = _flagged_names(project)
         assert "helper" in flagged
         assert "RATE" in flagged
+
+
+class TestDynamicAndRequireImports:
+    """`import('./mod')` and `require('./mod')` load the whole module at
+    runtime; statically invisible name consumption must not flag exports."""
+
+    def test_dynamic_import_marks_all_exports_used(self, tmp_path):
+        project = _make_project(
+            tmp_path,
+            "export async function load() {\n"
+            "  const u = await import('./utils');\n"
+            "  return u.helper() + u.RATE;\n"
+            "}\n",
+        )
+        assert not [f for _n, f in _unused_names(project) if f.endswith("utils.ts")]
+
+    def test_require_marks_all_exports_used(self, tmp_path):
+        project = _make_project(
+            tmp_path,
+            "const u = require('./utils');\nexport const total = u.helper();\n",
+        )
+        assert not [f for _n, f in _unused_names(project) if f.endswith("utils.ts")]
+
+    def test_bare_specifier_dynamic_import_cannot_mark_used(self, tmp_path):
+        # Dynamic import of a package ('lodash') says nothing about local
+        # modules — utils.ts must still be reported as unused.
+        project = _make_project(
+            tmp_path,
+            "export async function load() {\n  return import('lodash');\n}\n",
+        )
+        assert {n for n, _f in _unused_names(project)} == {"helper", "RATE"}
