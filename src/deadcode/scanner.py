@@ -120,6 +120,31 @@ _REEXPORT_PATTERN = re.compile(
     re.DOTALL,
 )
 
+# Namespace import: `import * as Utils from './utils'`. A namespace binding
+# reaches every export of the module through one object (`Utils.foo`), so
+# individual names cannot be attributed to use sites. Like a barrel re-export,
+# the whole export surface of the target module counts as consumed; otherwise
+# exports used only via a namespace are falsely reported as unused with
+# removable=True — live code queued for deletion.
+_NAMESPACE_IMPORT_PATTERN = re.compile(
+    r"import\s+\*\s+as\s+\w+\s+from\s*['\"]([^'\"]+)['\"]"
+)
+
+# Bare side-effect import: `import './polyfill';` — executes the module without
+# binding any names, consuming its entire export surface.
+_SIDE_EFFECT_IMPORT_PATTERN = re.compile(
+    r"^\s*import\s*['\"]([^'\"]+)['\"]", re.MULTILINE
+)
+
+# Dynamic import: `const m = await import('./heavy');` — lazily loads the whole
+# module at runtime; individual consumed names are invisible statically, so the
+# module's entire export surface counts as used.
+_DYNAMIC_IMPORT_PATTERN = re.compile(r"import\(\s*['\"]([^'\"]+)['\"]\s*\)")
+
+# CommonJS require: `const m = require('./legacy');` — same whole-module
+# consumption semantics as a dynamic import.
+_REQUIRE_PATTERN = re.compile(r"(?<![\w$.])require\(\s*['\"]([^'\"]+)['\"]\s*\)")
+
 # className="..." or className={...} in JSX
 _CLASSNAME_PATTERN = re.compile(
     r"class(?:Name)?\s*[=:]\s*['\"]([^'\"]+)['\"]|"
@@ -404,14 +429,16 @@ class DeadCodeScanner:
         imports: dict[str, set[str]],
         star_reexports: list[tuple[str, str]],
     ) -> None:
-        """Record re-export forwarding so barrel/index files don't false-positive.
+        """Record whole-module consumption so source modules don't false-positive.
 
         ``export { A, B as C } from './mod'`` consumes ``A`` and ``B`` from
         ``./mod``; the consumed (left-hand) names are registered as imports of
         this file so the source module's exports are not reported as unused.
-        ``export * from './mod'`` forwards every export of ``./mod``; the
-        (file, module) pair is recorded so those exports can be treated as used
-        once ``./mod`` is resolved to a scanned file.
+        ``export * from './mod'``, ``import * as NS from './mod'``, and bare
+        ``import './mod'`` all consume ``./mod``'s *entire* export surface —
+        individual names cannot be attributed — so each (file, module) pair is
+        recorded; those exports are treated as used once ``./mod`` resolves to
+        a scanned file.
         """
         for m in _REEXPORT_PATTERN.finditer(content):
             named = m.group(1)
@@ -430,6 +457,17 @@ class DeadCodeScanner:
             else:
                 # `export * from './mod'` — resolved to a file in phase 2.
                 star_reexports.append((rel_path, module_path))
+        for m in _NAMESPACE_IMPORT_PATTERN.finditer(content):
+            # `import * as NS from './mod'` — whole-module consumption.
+            star_reexports.append((rel_path, m.group(1)))
+        for m in _SIDE_EFFECT_IMPORT_PATTERN.finditer(content):
+            # `import './mod'` — side-effect-only consumption.
+            star_reexports.append((rel_path, m.group(1)))
+        for pattern in (_DYNAMIC_IMPORT_PATTERN, _REQUIRE_PATTERN):
+            for m in pattern.finditer(content):
+                # `import('./mod')` / `require('./mod')` — lazily loads the
+                # whole module; consumed names are invisible statically.
+                star_reexports.append((rel_path, m.group(1)))
 
     @staticmethod
     def _resolve_relative_module(importer_rel: str, spec: str, file_set: set[str]) -> str | None:
