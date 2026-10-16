@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-import click
 import json
 import sys
 from pathlib import Path
+
+import click
 from rich.console import Console
 from rich.table import Table
 
@@ -177,6 +178,10 @@ def remove(ctx: click.Context, dry_run: bool, category: str | None) -> None:
     """
     project = ctx.obj["project"]
     ignore = _merge_config_ignore(ctx)
+
+    if not Path(project).exists():
+        err_console.print(f"[red]Project directory '{project}' not found.[/red]")
+        sys.exit(1)
 
     if not dry_run:
         console.print("[red]WARNING: This will modify files. Use --dry-run first![/red]")
