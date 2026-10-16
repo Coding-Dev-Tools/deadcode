@@ -132,19 +132,16 @@ _TSCONFIG_PATHS_PATTERN = re.compile(
     r'"([^"]+)"\s*:\s*\["([^"]+)"\]',
 )
 
-# CSS-module accessor usage, two forms::
-#   - dot:    `styles.card`        -> capture group 1 empty, full = "styles.card"
-#   - bracket: `styles['card-hover']` / `styles["card"]` -> capture group 1 = name
-# We deliberately match either form after a binding identifier so both
-# `styles.card` and `styles['card-hover']` register the class as used.
+# CSS-module dot and literal bracket access, including valid JavaScript
+# identifiers containing '$', and CSS class names beginning with '_'.
 _CSS_MODULE_USAGE_PATTERN = re.compile(
-    r"""\b\w+\.(?:_?[\w$]+)|(\w+)\[['"]([\w$-]+)['"]\]""",
+    r"""(?<![\w$])([\w$]+)(?:\s*\.\s*([\w$]+)|\s*\[\s*(['"])([\w$-]+)\3\s*\])""",
 )
 
 # Detect a CSS-module import so we know which source-file class accessors
 # correspond to module classes (``import styles from './x.module.css'``).
 _CSS_MODULE_IMPORT_PATTERN = re.compile(
-    r"""import\s+(?:type\s+)?(\w+)\s+from\s+['"]([^'"]*\.module\.css)['"]""",
+    r"""import\s+(?:type\s+)?([\w$]+)\s+from\s+['"]([^'"]*\.module\.css)['"]""",
 )
 
 
@@ -233,10 +230,10 @@ class DeadCodeScanner:
             # Parse className usage in TSX/JSX files
             if rel_path.endswith((".tsx", ".jsx")):
                 self._parse_classname_usage(content, used_css_classes)
-                # CSS-module accessor usage (styles.card / styles['card']).
-                # Only register accessors imported as a CSS module so we don't
-                # treat every object property access (e.g. `user.name`) as a
-                # CSS class.
+
+            # CSS modules can also be consumed by plain TypeScript/JavaScript
+            # files, for example when exporting class-name maps to components.
+            if not self._is_css_file(rel_path):
                 self._parse_css_module_usage(content, used_css_classes)
 
             # Parse components
@@ -301,6 +298,12 @@ class DeadCodeScanner:
                     continue
 
                 filepath = Path(root) / fname
+                # A source-file symlink may resolve outside the project. Such
+                # findings could otherwise make `remove` modify external files.
+                try:
+                    filepath.resolve().relative_to(self.project_dir)
+                except (ValueError, OSError, RuntimeError):
+                    continue
                 if self._is_scannable_file(rel_path):
                     files.append(filepath)
 
@@ -490,21 +493,9 @@ class DeadCodeScanner:
         if not module_bindings:
             return
         for m in _CSS_MODULE_USAGE_PATTERN.finditer(content):
-            groups = m.groups()
-            # Bracket form `styles['card-hover']` -> groups = (binding, name).
-            # Dot form `styles.card` -> groups = (None, None); the whole match
-            # is "binding.attr". Distinguish by whether a bracket name exists.
-            bracket_binding, bracket_name = groups
-            if bracket_name is not None:
-                if bracket_binding in module_bindings:
-                    used_css_classes.add(bracket_name)
-                continue
-            # Dot form `styles.card` -> the whole match is "binding.attr".
-            full = m.group(0)
-            binding, _, attr = full.partition(".")
-            if binding in module_bindings and attr and attr[0] != "_":
-                # Skip internal/private-ish accessors (e.g. styles.toString).
-                used_css_classes.add(attr)
+            binding, dot_name, _, bracket_name = m.groups()
+            if binding in module_bindings:
+                used_css_classes.add(dot_name or bracket_name)
 
     def _parse_components(self, content: str, rel_path: str, components: dict[str, str]) -> None:
         """Extract React component definitions."""
