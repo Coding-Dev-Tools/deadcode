@@ -12,6 +12,15 @@ jobs:
   ensure-pr:
     runs-on: ubuntu-latest
     steps:
+      # gh pr create requires a local git checkout to diff head against base;
+      # without this step every run failed with "not a git repository" and no
+      # PR was ever opened (fleet-wide defect: 11/11 seeded copies lacked it).
+      - name: Check out the pushed branch
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ github.ref_name }}
+          persist-credentials: false
+          fetch-depth: 0
       - name: Open PR for this branch if none exists
         env:
           GH_TOKEN: ${{ github.token }}
