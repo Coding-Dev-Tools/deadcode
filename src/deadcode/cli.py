@@ -27,6 +27,14 @@ ALL_CATEGORIES = [
 FORMAT_CHOICES = click.Choice(["pretty", "compact", "github", "json"])
 
 
+def _escape_annotation(value: str, *, property_value: bool = False) -> str:
+    """Escape data for GitHub's workflow-command protocol."""
+    value = value.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+    if property_value:
+        value = value.replace(":", "%3A").replace(",", "%2C")
+    return value
+
+
 def _line_self_contained(text: str) -> bool:
     """Return True if a line's brackets/braces/parens are balanced on that line.
 
@@ -183,7 +191,9 @@ def scan(
             ],
             "errors": result.errors,
         }
-        console.print(json.dumps(output, indent=2, default=str))
+        # Machine output must preserve literal paths and remain valid at any
+        # terminal width; Rich interprets markup and wraps long JSON strings.
+        click.echo(json.dumps(output, indent=2, default=str))
     elif effective_format == "compact":
         if not findings:
             console.print("OK — 0 findings")
@@ -195,15 +205,16 @@ def scan(
         # GitHub Actions annotation syntax
         # ::warning file={name},line={line},endLine={line}::{message}
         if not findings:
-            console.print("deadcode: 0 findings")
+            click.echo("deadcode: 0 findings")
         else:
             for f in findings:
                 level = "error" if f.removable else "warning"
                 msg = f"{f.category}: {f.name}"
                 if f.detail:
                     msg += f" ({f.detail[:120]})"
-                console.print(f"::{level} file={f.file},line={f.line}::{msg}")
-            console.print(f"\n::notice::deadcode: {len(findings)} findings")
+                file = _escape_annotation(f.file, property_value=True)
+                click.echo(f"::{level} file={file},line={f.line}::{_escape_annotation(msg)}")
+            click.echo(f"\n::notice::deadcode: {len(findings)} findings")
     else:
         # Summary
         console.print(
