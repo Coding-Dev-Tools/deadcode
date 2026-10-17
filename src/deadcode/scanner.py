@@ -221,9 +221,11 @@ class DeadCodeScanner:
         imports: dict[str, set[str]] = {}  # name -> set of files that import it
         css_classes: dict[str, list[tuple[str, int]]] = {}  # class -> [(file, line)]
         used_css_classes: set[str] = set()
+        used_css_module_classes: dict[Path, set[str]] = {}
         components: dict[str, str] = {}  # ComponentName -> file
         routes: list[tuple[str, str]] = []  # (route_path, file)
         star_reexports: list[tuple[str, str]] = []  # (barrel_file, module_spec)
+        file_set = {str(f.relative_to(self.project_dir)).replace("\\", "/") for f in all_files}
 
         for filepath in all_files:
             try:
@@ -251,16 +253,11 @@ class DeadCodeScanner:
             # Parse className usage in TSX/JSX files
             if rel_path.endswith((".tsx", ".jsx")):
                 self._parse_classname_usage(content, used_css_classes)
-                # CSS-module accessor usage (styles.card / styles['card']).
-                # Only register accessors imported as a CSS module so we don't
-                # treat every object property access (e.g. `user.name`) as a
-                # CSS class.
-                self._parse_css_module_usage(content, used_css_classes)
 
             # CSS modules can also be consumed by plain TypeScript/JavaScript
             # files, for example when exporting class-name maps to components.
             if not self._is_css_file(rel_path):
-                self._parse_css_module_usage(content, used_css_classes)
+                self._parse_css_module_usage(content, rel_path, file_set, used_css_module_classes)
 
             # Parse components
             if rel_path.endswith((".tsx", ".jsx")):
@@ -276,7 +273,6 @@ class DeadCodeScanner:
         # Resolve `export * from './mod'` specifiers to scanned files so that
         # every export forwarded by a barrel is treated as part of the public
         # API surface (never reported as removable).
-        file_set = {str(f.relative_to(self.project_dir)).replace("\\", "/") for f in all_files}
         star_reexported_files: set[str] = set()
         for barrel_file, module_spec in star_reexports:
             resolved = self._resolve_relative_module(barrel_file, module_spec, file_set)
@@ -290,7 +286,7 @@ class DeadCodeScanner:
         self._find_dead_routes(routes, all_files, result)
 
         # 2c. Orphaned CSS
-        self._find_orphaned_css(css_classes, used_css_classes, result)
+        self._find_orphaned_css(css_classes, used_css_classes, used_css_module_classes, result)
 
         # 2d. Unreferenced components
         # Collect all names that are imported somewhere (i.e., actually used)
@@ -512,7 +508,13 @@ class DeadCodeScanner:
                     for cls in group.split():
                         used_css_classes.add(cls)
 
-    def _parse_css_module_usage(self, content: str, used_css_classes: set[str]) -> None:
+    def _parse_css_module_usage(
+        self,
+        content: str,
+        rel_path: str,
+        file_set: set[str],
+        used_css_module_classes: dict[Path, set[str]],
+    ) -> None:
         """Extract CSS-module class names consumed via object accessors.
 
         The canonical Next.js/React pattern is::
@@ -520,21 +522,26 @@ class DeadCodeScanner:
             import styles from './Card.module.css';
             <div className={styles.card}>...</div>
 
-        We first find any ``*.module.css`` imports (binding name ``styles``)
-        so that accessor use ``styles.card`` registers ``card`` as a used
-        class. Bracket access ``styles['card-hover']`` is also captured.
+        Resolve each relative ``*.module.css`` import from its importing file
+        so that ``styles.card`` protects ``card`` only in that stylesheet.
+        Bracket access ``styles['card-hover']`` is also captured. Canonical
+        paths keep internal stylesheet symlinks and their targets consistent.
         Without this, every CSS-module class is falsely reported as orphaned
         and marked removable=True, risking deletion of live styles.
         """
         # Map the local binding (e.g. ``styles``) to a CSS-module import so
         # only module accessors are treated as class names.
-        module_bindings = {m.group(1) for m in _CSS_MODULE_IMPORT_PATTERN.finditer(content)}
+        module_bindings: dict[str, Path] = {}
+        for match in _CSS_MODULE_IMPORT_PATTERN.finditer(content):
+            stylesheet = self._resolve_relative_module(rel_path, match.group(2), file_set)
+            if stylesheet is not None and stylesheet.endswith(".module.css"):
+                module_bindings[match.group(1)] = (self.project_dir / stylesheet).resolve()
         if not module_bindings:
             return
         for m in _CSS_MODULE_USAGE_PATTERN.finditer(content):
             binding, dot_name, _, bracket_name = m.groups()
             if binding in module_bindings:
-                used_css_classes.add(dot_name or bracket_name)
+                used_css_module_classes.setdefault(module_bindings[binding], set()).add(dot_name or bracket_name)
 
     def _parse_components(self, content: str, rel_path: str, components: dict[str, str]) -> None:
         """Extract React component definitions."""
@@ -661,9 +668,11 @@ class DeadCodeScanner:
         self,
         css_classes: dict[str, list[tuple[str, int]]],
         used_css_classes: set[str],
+        used_css_module_classes: dict[Path, set[str]],
         result: ScanResult,
     ) -> None:
         """Find CSS classes defined but never used in JSX."""
+        module_usage_by_file: dict[str, set[str]] = {}
         for cls, locations in css_classes.items():
             # Skip common utility classes and pseudo-selectors
             if cls.startswith(
@@ -680,9 +689,16 @@ class DeadCodeScanner:
                 )
             ):
                 continue
-            if cls in used_css_classes:
-                continue
             for file, line in locations:
+                if file.endswith(".module.css"):
+                    if file not in module_usage_by_file:
+                        module_usage_by_file[file] = used_css_module_classes.get(
+                            (self.project_dir / file).resolve(), set()
+                        )
+                    if cls in module_usage_by_file[file]:
+                        continue
+                elif cls in used_css_classes:
+                    continue
                 result.findings.append(
                     Finding(
                         file=file,
