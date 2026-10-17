@@ -105,3 +105,32 @@ def test_remove_preserves_live_module_and_only_removes_unused_definitions(tmp_pa
     assert (tmp_path / "B.module.css").read_text() == ".shared { color: red; }\n"
     assert ".shared" not in (tmp_path / "A.module.css").read_text()
     assert ".shared" not in (tmp_path / "global.css").read_text()
+
+
+def test_unresolved_alias_keeps_module_findings_visible_and_nonremovable(tmp_path):
+    for name in ["A.module.css", "B.module.css", "global.css"]:
+        (tmp_path / name).write_text(".shared {}\n")
+    (tmp_path / "consumer.ts").write_text("import styles from '@/Card.module.css';\nconst selected = styles.shared;\n")
+
+    findings = DeadCodeScanner(tmp_path).scan().orphaned_css
+
+    assert {(finding.file, finding.name) for finding in findings} == {
+        ("A.module.css", "shared"),
+        ("B.module.css", "shared"),
+        ("global.css", "shared"),
+    }
+    assert {finding.file for finding in findings if finding.removable} == {"global.css"}
+    assert all("unresolved stylesheet import" in finding.detail for finding in findings if not finding.removable)
+
+
+def test_remove_retains_uncertain_module_classes_and_removes_unreferenced_global_class(tmp_path):
+    for name in ["A.module.css", "B.module.css", "global.css"]:
+        (tmp_path / name).write_text(".shared { color: red; }\n")
+    (tmp_path / "consumer.ts").write_text("import styles from '@/Card.module.css';\nconst selected = styles.shared;\n")
+
+    result = CliRunner().invoke(cli, ["-p", str(tmp_path), "remove", "-c", "orphaned_css"], input="y\n")
+
+    assert result.exit_code == 0, result.output
+    for name in ["A.module.css", "B.module.css"]:
+        assert (tmp_path / name).read_text() == ".shared { color: red; }\n"
+    assert ".shared" not in (tmp_path / "global.css").read_text()

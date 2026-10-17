@@ -222,6 +222,7 @@ class DeadCodeScanner:
         css_classes: dict[str, list[tuple[str, int]]] = {}  # class -> [(file, line)]
         used_css_classes: set[str] = set()
         used_css_module_classes: dict[Path, set[str]] = {}
+        unresolved_css_module_classes: set[str] = set()
         components: dict[str, str] = {}  # ComponentName -> file
         routes: list[tuple[str, str]] = []  # (route_path, file)
         star_reexports: list[tuple[str, str]] = []  # (barrel_file, module_spec)
@@ -257,7 +258,9 @@ class DeadCodeScanner:
             # CSS modules can also be consumed by plain TypeScript/JavaScript
             # files, for example when exporting class-name maps to components.
             if not self._is_css_file(rel_path):
-                self._parse_css_module_usage(content, rel_path, file_set, used_css_module_classes)
+                self._parse_css_module_usage(
+                    content, rel_path, file_set, used_css_module_classes, unresolved_css_module_classes
+                )
 
             # Parse components
             if rel_path.endswith((".tsx", ".jsx")):
@@ -286,7 +289,9 @@ class DeadCodeScanner:
         self._find_dead_routes(routes, all_files, result)
 
         # 2c. Orphaned CSS
-        self._find_orphaned_css(css_classes, used_css_classes, used_css_module_classes, result)
+        self._find_orphaned_css(
+            css_classes, used_css_classes, used_css_module_classes, unresolved_css_module_classes, result
+        )
 
         # 2d. Unreferenced components
         # Collect all names that are imported somewhere (i.e., actually used)
@@ -514,6 +519,7 @@ class DeadCodeScanner:
         rel_path: str,
         file_set: set[str],
         used_css_module_classes: dict[Path, set[str]],
+        unresolved_css_module_classes: set[str],
     ) -> None:
         """Extract CSS-module class names consumed via object accessors.
 
@@ -526,22 +532,30 @@ class DeadCodeScanner:
         so that ``styles.card`` protects ``card`` only in that stylesheet.
         Bracket access ``styles['card-hover']`` is also captured. Canonical
         paths keep internal stylesheet symlinks and their targets consistent.
+        Classes used through unresolved imports remain uncertain so alias or
+        bundler-specific resolution cannot make live module classes removable.
         Without this, every CSS-module class is falsely reported as orphaned
         and marked removable=True, risking deletion of live styles.
         """
         # Map the local binding (e.g. ``styles``) to a CSS-module import so
         # only module accessors are treated as class names.
-        module_bindings: dict[str, Path] = {}
+        module_bindings: dict[str, Path | None] = {}
         for match in _CSS_MODULE_IMPORT_PATTERN.finditer(content):
             stylesheet = self._resolve_relative_module(rel_path, match.group(2), file_set)
             if stylesheet is not None and stylesheet.endswith(".module.css"):
                 module_bindings[match.group(1)] = (self.project_dir / stylesheet).resolve()
+            else:
+                module_bindings[match.group(1)] = None
         if not module_bindings:
             return
         for m in _CSS_MODULE_USAGE_PATTERN.finditer(content):
             binding, dot_name, _, bracket_name = m.groups()
             if binding in module_bindings:
-                used_css_module_classes.setdefault(module_bindings[binding], set()).add(dot_name or bracket_name)
+                stylesheet_path = module_bindings[binding]
+                if stylesheet_path is None:
+                    unresolved_css_module_classes.add(dot_name or bracket_name)
+                else:
+                    used_css_module_classes.setdefault(stylesheet_path, set()).add(dot_name or bracket_name)
 
     def _parse_components(self, content: str, rel_path: str, components: dict[str, str]) -> None:
         """Extract React component definitions."""
@@ -669,6 +683,7 @@ class DeadCodeScanner:
         css_classes: dict[str, list[tuple[str, int]]],
         used_css_classes: set[str],
         used_css_module_classes: dict[Path, set[str]],
+        unresolved_css_module_classes: set[str],
         result: ScanResult,
     ) -> None:
         """Find CSS classes defined but never used in JSX."""
@@ -699,14 +714,19 @@ class DeadCodeScanner:
                         continue
                 elif cls in used_css_classes:
                     continue
+                uncertain = file.endswith(".module.css") and cls in unresolved_css_module_classes
                 result.findings.append(
                     Finding(
                         file=file,
                         line=line,
                         name=cls,
                         category="orphaned_css",
-                        detail=f"CSS class '.{cls}' is not used in any JSX className",
-                        removable=True,
+                        detail=(
+                            f"CSS module class '.{cls}' may be used through an unresolved stylesheet import"
+                            if uncertain
+                            else f"CSS class '.{cls}' is not used in any JSX className"
+                        ),
+                        removable=not uncertain,
                     )
                 )
 
