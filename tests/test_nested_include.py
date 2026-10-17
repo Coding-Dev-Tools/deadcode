@@ -21,14 +21,10 @@ def nested_project(tmp_path):
 
 @pytest.mark.parametrize("pattern", ["src/components/*.tsx", "**/*.tsx", "src/components/Unused.tsx"])
 def test_nested_file_whitelist_reaches_matching_files(nested_project, pattern):
-    result = DeadCodeScanner(
-        nested_project, include_patterns=[pattern], ignore_patterns=["**/ignored.tsx"]
-    ).scan()
+    result = DeadCodeScanner(nested_project, include_patterns=[pattern], ignore_patterns=["**/ignored.tsx"]).scan()
 
     assert result.files_scanned == 1
-    assert [(finding.file, finding.name) for finding in result.findings] == [
-        ("src/components/Unused.tsx", "unused")
-    ]
+    assert [(finding.file, finding.name) for finding in result.findings] == [("src/components/Unused.tsx", "unused")]
 
 
 @pytest.mark.parametrize("command", [["scan", "--format=json"], ["stats"], ["remove", "--dry-run"]])

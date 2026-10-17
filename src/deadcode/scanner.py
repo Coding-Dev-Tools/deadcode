@@ -126,15 +126,11 @@ _REEXPORT_PATTERN = re.compile(
 # the whole export surface of the target module counts as consumed; otherwise
 # exports used only via a namespace are falsely reported as unused with
 # removable=True — live code queued for deletion.
-_NAMESPACE_IMPORT_PATTERN = re.compile(
-    r"import\s+\*\s+as\s+\w+\s+from\s*['\"]([^'\"]+)['\"]"
-)
+_NAMESPACE_IMPORT_PATTERN = re.compile(r"import\s+\*\s+as\s+\w+\s+from\s*['\"]([^'\"]+)['\"]")
 
 # Bare side-effect import: `import './polyfill';` — executes the module without
 # binding any names, consuming its entire export surface.
-_SIDE_EFFECT_IMPORT_PATTERN = re.compile(
-    r"^\s*import\s*['\"]([^'\"]+)['\"]", re.MULTILINE
-)
+_SIDE_EFFECT_IMPORT_PATTERN = re.compile(r"^\s*import\s*['\"]([^'\"]+)['\"]", re.MULTILINE)
 
 # Dynamic import: `const m = await import('./heavy');` — lazily loads the whole
 # module at runtime; individual consumed names are invisible statically, so the
