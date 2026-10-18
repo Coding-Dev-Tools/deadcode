@@ -24,6 +24,8 @@ class _Token:
 
 
 _WORD = re.compile(r"[\w$]+", re.UNICODE)
+_JSX_CLOSING = re.compile(r"</(?:[\w$][\w$:.-]*\s*)?>")
+_CLASS_VALUE_OPERATORS = {":", "=", "+=", "-=", "*=", "/=", "%=", "**=", "&=", "|=", "^=", "&&=", "||=", "??="}
 _PREFIX = {"keyof", "readonly", "unique", "typeof", "asserts", "abstract", "new"}
 _MODIFIERS = {"public", "private", "protected", "static", "readonly", "abstract", "declare", "override", "accessor"}
 _EXPRESSION_PREFIX = {
@@ -225,6 +227,14 @@ def _lex(source: str, index: int = 0, *, interpolation: bool = False, depth: int
                 else:
                     index += 1
             tokens.append(_Token(source[start:index], start, index, complete=complete))
+            continue
+        # Closing tags/fragments and self-closing delimiters contain no runtime
+        # expressions. A slash after '<' or a generic '>' must not consume the
+        # following sibling's class expressions as an opaque regular expression.
+        closing_jsx = _JSX_CLOSING.match(source, index)
+        if closing_jsx or source.startswith("/>", index) and tokens and tokens[-1].value == ">":
+            index = closing_jsx.end() if closing_jsx else index + 2
+            tokens.append(_Token(source[start:index], start, index))
             continue
         # A regex is opaque. Failed recognition leaves the slash as punctuation,
         # including JSX closing tags and divisions; it never swallows a file tail.
@@ -825,3 +835,45 @@ def class_value_positions(source: str, *, depth: int = 0) -> tuple[set[int], set
                 calls.update(start + value for value in nested_calls)
                 words.update(start + value for value in nested_words)
     return property_keys, calls, words
+
+
+def class_property_positions(source: str, *, depth: int = 0) -> list[tuple[str, int, int, bool]]:
+    """Return class property/write keys, offsets and compound uncertainty.
+
+    Comments are already skipped by the lexer. Exact assignment operators avoid
+    treating equality tests or arrows as writes; quoted member keys are decoded
+    by the caller's existing JavaScript string reader.
+    """
+    tokens = _tokens(source)
+    assignments = []
+    for index, token in enumerate(tokens):
+        operator = index + 1
+        if token.value[:1] in {"'", '"', "`"}:
+            if (
+                index >= 2
+                and tokens[index - 1].value == "["
+                and tokens[operator : operator + 1]
+                and tokens[operator].value == "]"
+                and (tokens[index - 2].word or tokens[index - 2].value in {")", "]", "!"})
+            ):
+                operator += 1
+            elif operator >= len(tokens) or tokens[operator].value not in {":", "="}:
+                operator = len(tokens)
+        elif token.value not in {"className", "class"}:
+            operator = len(tokens)
+        if operator < len(tokens) and tokens[operator].value in _CLASS_VALUE_OPERATORS:
+            start = tokens[operator + 1].start if operator + 1 < len(tokens) else tokens[operator].end
+            assignments.append((token.value, token.start, start, tokens[operator].value not in {":", "="}))
+        if token.expressions and depth < 80:
+            for start, end in token.expressions:
+                assignments.extend(
+                    (key, start + key_offset, start + offset, compound)
+                    for key, key_offset, offset, compound in class_property_positions(
+                        source[start:end], depth=depth + 1
+                    )
+                )
+        elif token.uncertain and re.search(r"\b(?:className|class)\b[\s\S]*=", token.value):
+            # An ambiguous lexical range cannot establish absence of a runtime
+            # write. Keep possible global uses uncertain rather than delete CSS.
+            assignments.append(("className", token.start, token.end, True))
+    return assignments

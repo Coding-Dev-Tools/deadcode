@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pathspec
 
-from ._typescript import class_usage_source, class_value_positions
+from ._typescript import class_property_positions, class_usage_source, class_value_positions
 
 # ── Data structures ───────────────────────────────────────────────────
 
@@ -343,7 +343,7 @@ def _decode_jsx_attribute(value: str) -> str | None:
     return decoded if valid else None
 
 
-def _jsx_class_attributes(content: str):
+def _jsx_class_attributes(content: str, attribute_positions: set[int] | None = None):
     """Yield raw JSX values or JS expressions from possible opening tags.
 
     Looking at every possible tag intentionally over-approximates tags inside
@@ -371,6 +371,8 @@ def _jsx_class_attributes(content: str):
                 index += 1
                 continue
             wanted = name.group() in {"className", "class"}
+            if wanted and attribute_positions is not None:
+                attribute_positions.add(name.start())
             index = name.end()
             while index < len(content) and content[index].isspace():
                 index += 1
@@ -886,11 +888,18 @@ class DeadCodeScanner:
             if not complete:
                 used_css_classes.add(None)
 
-        for raw_jsx, value in _jsx_class_attributes(content):
+        jsx_properties: set[int] = set()
+        for raw_jsx, value in _jsx_class_attributes(content, jsx_properties):
             consume(raw_jsx, value)
         for property_match in _CLASS_PROPERTY_PATTERN.finditer(content):
             if property_match.start() in properties:
                 consume(False, _class_property_value(content, property_match.end()))
+        for key, key_start, start, compound in class_property_positions(content):
+            if key_start in jsx_properties:
+                continue  # The JSX reader has already consumed its own grammar.
+            name = _decode_js_string(key) if key[:1] in {"'", '"', "`"} else key
+            if name in {"className", "class"}:
+                consume(False, None if compound else _class_property_value(content, start))
         for call in _CLASSNAMES_CALL_PATTERN.finditer(content):
             if call.start() not in calls:
                 continue
