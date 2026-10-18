@@ -21,10 +21,11 @@ class _Token:
     expressions: tuple[tuple[int, int], ...] = ()
     complete: bool = True
     uncertain: bool = False
+    type_spans: tuple[tuple[int, int], ...] = ()
 
 
 _WORD = re.compile(r"[\w$]+", re.UNICODE)
-_JSX_OPENING = re.compile(r"<[a-zA-Z][\w:.-]*(?=[\s/>])(?!\s*(?:=|extends\b))")
+_JSX_OPENING = re.compile(r"<(?:[^\W\d]|\$)[\w$:.-]*(?=[\s/><])(?!\s*(?:=|extends\b))")
 _JSX_CLOSING = re.compile(r"</(?:[\w$][\w$:.-]*\s*)?>")
 _CLASS_VALUE_OPERATORS = {":", "=", "+=", "-=", "*=", "/=", "%=", "**=", "&=", "|=", "^=", "&&=", "||=", "??="}
 _PREFIX = {"keyof", "readonly", "unique", "typeof", "asserts", "abstract", "new"}
@@ -158,6 +159,7 @@ def _jsx_element(source: str, index: int, depth: int) -> _Token | None:
         return None
     start = index
     expressions = []
+    type_spans = []
     uncertain = False
     if source.startswith("<>", index):
         name = ""
@@ -168,10 +170,23 @@ def _jsx_element(source: str, index: int, depth: int) -> _Token | None:
             return None
         name = source[index + 1 : opening.end()]
         index = opening.end()
+        if index < len(source) and source[index] == "<":
+            arguments = _RuntimeView(source[index:], jsx=False)
+            end = arguments.angle_end(0)
+            if end is None:
+                return None
+            argument_end = index + arguments.tokens[end - 1].end
+            type_spans.append((index, argument_end))
+            index = argument_end
         while index < len(source):
             if source.startswith("/>", index):
                 return _Token(
-                    source[start : index + 2], start, index + 2, expressions=tuple(expressions), uncertain=uncertain
+                    source[start : index + 2],
+                    start,
+                    index + 2,
+                    expressions=tuple(expressions),
+                    uncertain=uncertain,
+                    type_spans=tuple(type_spans),
                 )
             if source[index] == ">":
                 index += 1
@@ -189,7 +204,7 @@ def _jsx_element(source: str, index: int, depth: int) -> _Token | None:
                 uncertain |= nested_uncertain
                 index = end + 1
             elif source[index] == "<":
-                return None  # Generic JSX arguments retain the existing token path.
+                return None
             else:
                 index += 1
         else:
@@ -200,13 +215,19 @@ def _jsx_element(source: str, index: int, depth: int) -> _Token | None:
             if not closing or source[index + 2 : closing.end() - 1].strip() != name:
                 return None
             return _Token(
-                source[start : closing.end()], start, closing.end(), expressions=tuple(expressions), uncertain=uncertain
+                source[start : closing.end()],
+                start,
+                closing.end(),
+                expressions=tuple(expressions),
+                uncertain=uncertain,
+                type_spans=tuple(type_spans),
             )
         if source[index] == "<":
             child = _jsx_element(source, index, depth + 1)
             if child is None:
                 return None
             expressions.extend(child.expressions)
+            type_spans.extend(child.type_spans)
             uncertain |= child.uncertain
             index = child.end
         elif source[index] == "{":
@@ -874,6 +895,11 @@ class _RuntimeView:
         for token in self.tokens:
             for start, end in token.expressions:
                 output[start:end] = class_usage_source(self.source[start:end], path, depth=depth + 1)
+            if path.endswith(".tsx"):
+                for start, end in token.type_spans:
+                    for index in range(start, end):
+                        if output[index] not in "\r\n":
+                            output[index] = " "
         merged = []
         for start, end in sorted(self.erased):
             if merged and start <= merged[-1][1]:

@@ -111,3 +111,18 @@ def test_typescript_assertion_with_apparent_closing_tag_keeps_live_access(tmp_pa
     )
     findings = DeadCodeScanner(tmp_path).scan().orphaned_css
     assert {finding.name for finding in findings} == {"unused"}
+
+
+@pytest.mark.parametrize("tag", ["Élément", "Button<string>"])
+def test_generic_and_unicode_jsx_keep_module_and_literal_classes(tmp_path, tag):
+    (tmp_path / "Card.module.css").write_text(".card {}\n.unused {}\n", encoding="utf-8")
+    (tmp_path / "global.css").write_text(".literal {}\n.unusedGlobal {}\n", encoding="utf-8")
+    closing = tag.split("<")[0]
+    (tmp_path / "consumer.tsx").write_text(
+        "import styles from './Card.module.css';\n"
+        f'<{tag} className="literal">It\'s <span className={{styles.card}} /></{closing}>;\n',
+        encoding="utf-8",
+    )
+    findings = DeadCodeScanner(tmp_path).scan().orphaned_css
+    assert {finding.name for finding in findings} == {"unused", "unusedGlobal"}
+    assert all(finding.removable for finding in findings)

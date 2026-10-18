@@ -268,7 +268,7 @@ _REQUIRE_PATTERN = re.compile(r"(?<![\w$.])require\(\s*['\"]([^'\"]+)['\"]\s*\)"
 # delimiter parsing separate from strings inside JavaScript expressions.
 _JS_LITERAL_PATTERN = re.compile(r"""'(?:\\[\s\S]|[^'\\\r\n])*'|"(?:\\[\s\S]|[^"\\\r\n])*"|`(?:\\[\s\S]|[^`\\])*`""")
 _JS_COMMENT_PATTERN = re.compile(r"//[^\r\n]*|/\*[\s\S]*?\*/")
-_JSX_TAG_PATTERN = re.compile(r"<[a-zA-Z][\w:.-]*")
+_JSX_TAG_PATTERN = re.compile(r"<(?:[^\W\d]|\$)[\w$:.-]*")
 _JSX_ATTRIBUTE_PATTERN = re.compile(r"[a-zA-Z_:][\w:.-]*")
 _CLASS_PROPERTY_PATTERN = re.compile(r"""(?<![\w$])(?:className|class|['"]className['"]|['"]class['"])\s*:\s*""")
 _CLASSNAMES_CALL_PATTERN = re.compile(r"(?<![\w$])(?:classNames|clsx)\s*(?=\()")
