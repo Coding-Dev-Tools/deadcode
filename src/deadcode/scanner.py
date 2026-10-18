@@ -13,6 +13,7 @@ import os
 import re
 from bisect import bisect_right
 from dataclasses import dataclass, field
+from html.entities import name2codepoint
 from pathlib import Path
 
 import pathspec
@@ -256,12 +257,131 @@ _DYNAMIC_IMPORT_PATTERN = re.compile(r"import\(\s*['\"]([^'\"]+)['\"]\s*\)")
 # consumption semantics as a dynamic import.
 _REQUIRE_PATTERN = re.compile(r"(?<![\w$.])require\(\s*['\"]([^'\"]+)['\"]\s*\)")
 
-# className="..." or className={...} in JSX
-_CLASSNAME_PATTERN = re.compile(
-    r"class(?:Name)?\s*[=:]\s*['\"]([^'\"]+)['\"]|"
-    r"class(?:Name)?\s*[=:]\s*\{`([^`]+)`\}|"
-    r"classNames\([^)]*['\"]([\w\s-]+)['\"]",
-)
+# JSX attribute quotes do not use JavaScript backslash escaping. Keep their
+# delimiter parsing separate from strings inside JavaScript expressions.
+_JS_LITERAL_PATTERN = re.compile(r"""'(?:\\[\s\S]|[^'\\\r\n])*'|"(?:\\[\s\S]|[^"\\\r\n])*"|`(?:\\[\s\S]|[^`\\])*`""")
+_JS_COMMENT_PATTERN = re.compile(r"//[^\r\n]*|/\*[\s\S]*?\*/")
+_JSX_TAG_PATTERN = re.compile(r"<[a-zA-Z][\w:.-]*")
+_JSX_ATTRIBUTE_PATTERN = re.compile(r"[a-zA-Z_:][\w:.-]*")
+_CLASS_PROPERTY_PATTERN = re.compile(r"""(?<![\w$])(?:className|class|['"]className['"]|['"]class['"])\s*:\s*""")
+_CLASSNAMES_CALL_PATTERN = re.compile(r"(?<![\w$])(?:classNames|clsx)\s*(?=\()")
+_JSX_ENTITY_PATTERN = re.compile(r"&(?:#[xX][0-9a-fA-F]+|#[0-9]+|[a-zA-Z][a-zA-Z0-9]*);")
+_HTML_CLASS_SPACE_PATTERN = re.compile(r"[ \t\r\n\f]+")
+
+
+def _js_delimited_end(content: str, start: int) -> int | None:
+    """Find a closing JS delimiter without treating quoted braces as syntax."""
+    closing = {"{": "}", "[": "]", "(": ")"}
+    stack = [closing[content[start]]]
+    index = start + 1
+    while index < len(content):
+        skipped = _JS_LITERAL_PATTERN.match(content, index) or _JS_COMMENT_PATTERN.match(content, index)
+        if skipped:
+            index = skipped.end()
+            continue
+        char = content[index]
+        if char in closing:
+            stack.append(closing[char])
+        elif char in "}])":
+            if char != stack.pop():
+                return None
+            if not stack:
+                return index + 1
+        index += 1
+    return None
+
+
+def _decode_jsx_attribute(value: str) -> str | None:
+    """Decode semicolon-terminated JSX entities once, without HTML error recovery."""
+    valid = True
+
+    def entity(match: re.Match) -> str:
+        nonlocal valid
+        raw = match.group()
+        if not raw.startswith("&#"):
+            if raw == "&apos;":
+                return "'"
+            number = name2codepoint.get(raw[1:-1])
+            return chr(number) if number is not None else raw
+        code = raw[2:-1]
+        hexadecimal = code[:1].lower() == "x"
+        digits = (code[1:] if hexadecimal else code).lstrip("0") or "0"
+        if len(digits) > (6 if hexadecimal else 7):
+            valid = False
+            return raw
+        number = int(digits, 16 if hexadecimal else 10)
+        if not 0 < number <= 0x10FFFF or 0xD800 <= number <= 0xDFFF:
+            valid = False
+            return raw
+        # JSX numeric entities represent their code point directly; unlike
+        # html.unescape, C1 controls must not be changed to Windows-1252 text.
+        return chr(number)
+
+    decoded = _JSX_ENTITY_PATTERN.sub(entity, value)
+    return decoded if valid else None
+
+
+def _jsx_class_attributes(content: str):
+    """Yield raw JSX values or JS expressions from possible opening tags.
+
+    Looking at every possible tag intentionally over-approximates tags inside
+    source strings rather than missing nested JSX after quoted child text.
+    """
+    for tag in _JSX_TAG_PATTERN.finditer(content):
+        index = tag.end()
+        while index < len(content):
+            if content[index].isspace() or content[index] == "/":
+                index += 1
+                continue
+            if content[index] == ">":
+                break
+            if content[index] == "{":
+                end = _js_delimited_end(content, index)
+                if end is None:
+                    yield False, None
+                    break
+                if content[index + 1 : end - 1].lstrip().startswith("..."):
+                    yield False, None  # Spread props may supply any global class.
+                index = end
+                continue
+            name = _JSX_ATTRIBUTE_PATTERN.match(content, index)
+            if name is None:
+                index += 1
+                continue
+            wanted = name.group() in {"className", "class"}
+            index = name.end()
+            while index < len(content) and content[index].isspace():
+                index += 1
+            if index >= len(content) or content[index] != "=":
+                continue
+            index += 1
+            while index < len(content) and content[index].isspace():
+                index += 1
+            if index == len(content):
+                if wanted:
+                    yield False, None
+                break
+            if content[index] in "'\"":
+                end = content.find(content[index], index + 1)
+                if end < 0:
+                    if wanted:
+                        yield False, None
+                    break
+                if wanted:
+                    yield True, content[index + 1 : end]
+                index = end + 1
+            elif content[index] == "{":
+                end = _js_delimited_end(content, index)
+                if wanted:
+                    yield False, content[index + 1 : end - 1] if end is not None else None
+                if end is None:
+                    break
+                index = end
+            else:
+                if wanted:
+                    yield False, None
+                index += 1
+
 
 # tsconfig paths for path aliases
 _TSCONFIG_PATHS_PATTERN = re.compile(
@@ -321,6 +441,48 @@ def _decode_js_string(literal: str) -> str | None:
         return "".join(decoded).encode("utf-16-le", "surrogatepass").decode("utf-16-le")
     except UnicodeDecodeError:
         return None
+
+
+def _class_expression_values(expression: str, module_bindings: set[str]) -> tuple[set[str], bool]:
+    """Recognize literal values and owned module access; keep other expressions uncertain."""
+    expression = expression.strip()
+    while expression.startswith("(") and _js_delimited_end(expression, 0) == len(expression):
+        expression = expression[1:-1].strip()
+    if _JS_LITERAL_PATTERN.fullmatch(expression):
+        decoded = _decode_js_string(expression)
+        return ({decoded}, True) if decoded is not None else (set(), False)
+    if expression in {"null", "undefined", "false", "true"}:
+        return set(), True
+    accessor = _CSS_MODULE_USAGE_PATTERN.fullmatch(expression)
+    if accessor and accessor.group(1) in module_bindings:
+        return set(), True  # The separate module pass retains stylesheet scope.
+    computed = re.match(r"([\w$]+)\s*(?:\?\.)?\s*\[", expression)
+    if (
+        computed
+        and computed.group(1) in module_bindings
+        and _js_delimited_end(expression, computed.end() - 1) == len(expression)
+    ):
+        return set(), True
+    call = _CLASSNAMES_CALL_PATTERN.match(expression)
+    if call and _js_delimited_end(expression, call.end()) == len(expression):
+        arguments = expression[call.end() + 1 : -1]
+        values = set()
+        complete = True
+        for literal in _JS_LITERAL_PATTERN.finditer(arguments):
+            decoded = _decode_js_string(literal.group())
+            if decoded is None:
+                complete = False
+            else:
+                values.add(decoded)
+        remainder = _JS_COMMENT_PATTERN.sub("", _JS_LITERAL_PATTERN.sub("", arguments))
+        return values, complete and not remainder.strip(" \t\r\n\f,")
+    # Literal branches of conditions are possible uses, but cannot prove any
+    # other global class unused. Do not execute or guess variable bindings.
+    return {
+        decoded
+        for literal in _JS_LITERAL_PATTERN.finditer(expression)
+        if (decoded := _decode_js_string(literal.group())) is not None
+    }, False
 
 
 # Detect a CSS-module import so we know which source-file class accessors
@@ -384,7 +546,7 @@ class DeadCodeScanner:
         exports: dict[str, list[tuple[str, int]]] = {}  # name -> [(file, line)]
         imports: dict[str, set[str]] = {}  # name -> set of files that import it
         css_classes: dict[str, list[_CssDefinition]] = {}
-        used_css_classes: set[str] = set()
+        used_css_classes: set[str | None] = set()
         used_css_module_classes: dict[Path, set[str | None]] = {}
         unresolved_css_module_classes: set[str | None] = set()
         components: dict[str, str] = {}  # ComponentName -> file
@@ -415,8 +577,8 @@ class DeadCodeScanner:
             if self._is_css_file(rel_path):
                 self._parse_css_classes(content, rel_path, css_classes)
 
-            # Parse className usage in TSX/JSX files
-            if rel_path.endswith((".tsx", ".jsx")):
+            # Plain JS/TS can also export class props or classNames() values.
+            if not self._is_css_file(rel_path):
                 self._parse_classname_usage(content, used_css_classes)
 
             # CSS modules can also be consumed by plain TypeScript/JavaScript
@@ -678,13 +840,48 @@ class DeadCodeScanner:
                 cls = _decode_css_identifier(identifier)
                 css_classes.setdefault(cls, []).append(_CssDefinition(rel_path, i, True))
 
-    def _parse_classname_usage(self, content: str, used_css_classes: set[str]) -> None:
-        """Extract CSS class names used in JSX className attributes."""
-        for m in _CLASSNAME_PATTERN.finditer(content):
-            for group in m.groups():
-                if group:
-                    for cls in group.split():
-                        used_css_classes.add(cls)
+    def _parse_classname_usage(self, content: str, used_css_classes: set[str | None]) -> None:
+        """Read raw JSX attributes and JavaScript literals using their own grammar."""
+        module_bindings = {match.group(1) for match in _CSS_MODULE_IMPORT_PATTERN.finditer(content)}
+
+        def consume(raw_jsx: bool, value: str | None) -> None:
+            if value is None:
+                used_css_classes.add(None)
+                return
+            if raw_jsx:
+                decoded = _decode_jsx_attribute(value)
+                values, complete = ({decoded}, True) if decoded is not None else (set(), False)
+            else:
+                values, complete = _class_expression_values(value, module_bindings)
+            for text in values:
+                # HTML class tokens split on ASCII whitespace, not NBSP or
+                # other Unicode spaces produced by JSX entity references.
+                used_css_classes.update(filter(None, _HTML_CLASS_SPACE_PATTERN.split(text)))
+            if not complete:
+                used_css_classes.add(None)
+
+        for raw_jsx, value in _jsx_class_attributes(content):
+            consume(raw_jsx, value)
+        for property_match in _CLASS_PROPERTY_PATTERN.finditer(content):
+            literal = _JS_LITERAL_PATTERN.match(content, property_match.end())
+            consume(False, literal.group() if literal else None)
+            if literal:
+                index = literal.end()
+                while index < len(content):
+                    comment = _JS_COMMENT_PATTERN.match(content, index)
+                    if comment:
+                        index = comment.end()
+                    elif content[index].isspace():
+                        index += 1
+                    else:
+                        break
+                if index < len(content) and content[index] not in ",};)]":
+                    # A literal prefix followed by an operator or method call
+                    # does not determine the complete property value.
+                    used_css_classes.add(None)
+        for call in _CLASSNAMES_CALL_PATTERN.finditer(content):
+            end = _js_delimited_end(content, call.end())
+            consume(False, content[call.start() : end] if end is not None else None)
 
     def _parse_css_module_usage(
         self,
@@ -721,15 +918,24 @@ class DeadCodeScanner:
                 module_bindings[match.group(1)] = None
         if not module_bindings:
             return
+        recognized = set()
         for m in _CSS_MODULE_USAGE_PATTERN.finditer(content):
             binding, dot_name, bracket_literal = m.groups()
             if binding in module_bindings:
+                recognized.add(m.start())
                 name = dot_name if dot_name is not None else _decode_js_string(bracket_literal)
                 stylesheet_path = module_bindings[binding]
                 if stylesheet_path is None:
                     unresolved_css_module_classes.add(name)
                 else:
                     used_css_module_classes.setdefault(stylesheet_path, set()).add(name)
+        for binding, stylesheet_path in module_bindings.items():
+            for match in re.finditer(rf"(?<![\w$]){re.escape(binding)}\s*(?:\?\.)?\s*\[", content):
+                if match.start() not in recognized:
+                    if stylesheet_path is None:
+                        unresolved_css_module_classes.add(None)
+                    else:
+                        used_css_module_classes.setdefault(stylesheet_path, set()).add(None)
 
     def _parse_components(self, content: str, rel_path: str, components: dict[str, str]) -> None:
         """Extract React component definitions."""
@@ -855,7 +1061,7 @@ class DeadCodeScanner:
     def _find_orphaned_css(
         self,
         css_classes: dict[str, list[_CssDefinition]],
-        used_css_classes: set[str],
+        used_css_classes: set[str | None],
         used_css_module_classes: dict[Path, set[str | None]],
         unresolved_css_module_classes: set[str | None],
         result: ScanResult,
@@ -897,8 +1103,10 @@ class DeadCodeScanner:
                             (self.project_dir / file).resolve(), set()
                         )
                     used = cls in module_usage_by_file[file]
-                uncertain = not definition.global_scope and (
-                    cls in unresolved_css_module_classes
+                uncertain = (
+                    None in used_css_classes
+                    if definition.global_scope
+                    else cls in unresolved_css_module_classes
                     or None in unresolved_css_module_classes
                     or None in module_usage_by_file[file]
                 )
@@ -919,7 +1127,9 @@ class DeadCodeScanner:
                     name=cls,
                     category="orphaned_css",
                     detail=(
-                        f"CSS module class '.{cls}' may be used through an unresolved stylesheet import or computed key"
+                        f"CSS class '.{cls}' may be used through a computed class expression"
+                        if uncertain and definition.global_scope
+                        else f"CSS module class '.{cls}' may be used through an unresolved stylesheet import or computed key"
                         if uncertain
                         else f"CSS class '.{cls}' shares a rule or line with a used selector; remove manually"
                         if shared
