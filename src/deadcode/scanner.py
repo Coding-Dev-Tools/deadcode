@@ -268,8 +268,8 @@ _REQUIRE_PATTERN = re.compile(r"(?<![\w$.])require\(\s*['\"]([^'\"]+)['\"]\s*\)"
 # delimiter parsing separate from strings inside JavaScript expressions.
 _JS_LITERAL_PATTERN = re.compile(r"""'(?:\\[\s\S]|[^'\\\r\n])*'|"(?:\\[\s\S]|[^"\\\r\n])*"|`(?:\\[\s\S]|[^`\\])*`""")
 _JS_COMMENT_PATTERN = re.compile(r"//[^\r\n]*|/\*[\s\S]*?\*/")
-_JSX_TAG_PATTERN = re.compile(r"<(?:[^\W\d]|\$)[\w$:.-]*(?=[\s/>])")
-_JSX_ATTRIBUTE_PATTERN = re.compile(r"(?:[^\W\d]|[$:])[\w$:.-]*")
+_JSX_TAG_PATTERN = re.compile(r"<(?:[^\W\d]|\$|[^\x00-\x7f\s])(?:[\w$:.-]|[^\x00-\x7f\s])*(?=[\s/>])")
+_JSX_ATTRIBUTE_PATTERN = re.compile(r"(?:[^\W\d]|[$:]|[^\x00-\x7f\s])(?:[\w$:.-]|[^\x00-\x7f\s])*")
 _CLASS_PROPERTY_PATTERN = re.compile(r"""(?<![\w$])(?:className|class|['"]className['"]|['"]class['"])\s*:\s*""")
 _CLASSNAMES_CALL_PATTERN = re.compile(r"(?<![\w$])(?:classNames|clsx)\s*(?=\()")
 _JSX_ENTITY_PATTERN = re.compile(r"&(?:#[xX][0-9a-fA-F]+|#[0-9]+|[a-zA-Z][a-zA-Z0-9]*);")
@@ -394,7 +394,7 @@ def _jsx_class_attributes(content: str, attribute_positions: set[int] | None = N
             if content[index] in "'\"":
                 end = content.find(content[index], index + 1, limit)
                 if end < 0:
-                    if wanted:
+                    if wanted or limit < len(content):
                         yield False, None
                     break
                 if wanted:
@@ -405,6 +405,8 @@ def _jsx_class_attributes(content: str, attribute_positions: set[int] | None = N
                 if wanted:
                     yield False, content[index + 1 : end - 1] if end is not None else None
                 if end is None:
+                    if not wanted:
+                        yield False, None
                     break
                 index = end
             else:

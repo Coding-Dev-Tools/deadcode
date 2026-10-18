@@ -25,9 +25,9 @@ class _Token:
 
 
 _WORD = re.compile(r"[\w$]+", re.UNICODE)
-_JSX_OPENING = re.compile(r"<(?:[^\W\d]|\$)[\w$:.-]*(?=[\s/><])(?!\s*=)")
+_JSX_OPENING = re.compile(r"<(?:[^\W\d]|\$|[^\x00-\x7f\s])(?:[\w$:.-]|[^\x00-\x7f\s])*(?=[\s/><])(?!\s*=)")
 _JSX_EXTENDS = re.compile(r"\s+extends\s+(?![=>])")
-_JSX_CLOSING = re.compile(r"</(?:[\w$][\w$:.-]*\s*)?>")
+_JSX_CLOSING = re.compile(r"</(?:(?:[\w$]|[^\x00-\x7f\s])(?:[\w$:.-]|[^\x00-\x7f\s])*\s*)?>")
 _CLASS_VALUE_OPERATORS = {":", "=", "+=", "-=", "*=", "/=", "%=", "**=", "&=", "|=", "^=", "&&=", "||=", "??="}
 _PREFIX = {"keyof", "readonly", "unique", "typeof", "asserts", "abstract", "new"}
 _MODIFIERS = {"public", "private", "protected", "static", "readonly", "abstract", "declare", "override", "accessor"}

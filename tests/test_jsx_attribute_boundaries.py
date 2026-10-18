@@ -25,7 +25,7 @@ def test_extends_attributes_preserve_module_rules(tmp_path, monkeypatch, extensi
     assert (tmp_path / "Card.module.css").read_text() == ".live {}\n"
 
 
-@pytest.mark.parametrize("attribute", ["é", "λ", "字段", "$value"])
+@pytest.mark.parametrize("attribute", ["é", "e\u0301", "λ", "字段", "$value"])
 def test_unicode_attribute_names_do_not_expose_quoted_tag_delimiters(tmp_path, attribute):
     (tmp_path / "styles.css").write_text(".live {}\n.unused {}\n", encoding="utf-8")
     (tmp_path / "consumer.tsx").write_text(
@@ -47,10 +47,13 @@ def test_rejected_tag_candidates_have_linear_character_work():
     assert content.reads < 30 * len(content)
 
 
-def test_oversized_header_keeps_global_class_use_uncertain(tmp_path):
+@pytest.mark.parametrize(
+    "attributes", ["enabled " * 1500, 'title="' + "x" * 9000 + '" ', "value={" + " " * 9000 + "null} "]
+)
+def test_oversized_header_keeps_global_class_use_uncertain(tmp_path, attributes):
     (tmp_path / "styles.css").write_text(".live {}\n.unused {}\n", encoding="utf-8")
     (tmp_path / "consumer.tsx").write_text(
-        "const view = <div " + "enabled " * 1500 + 'className="live" />;\n', encoding="utf-8"
+        "const view = <div " + attributes + 'className="live" />;\n', encoding="utf-8"
     )
     findings = DeadCodeScanner(tmp_path).scan().orphaned_css
     assert findings and all(not finding.removable for finding in findings)
