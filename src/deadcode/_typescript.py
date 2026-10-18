@@ -25,7 +25,8 @@ class _Token:
 
 
 _WORD = re.compile(r"[\w$]+", re.UNICODE)
-_JSX_OPENING = re.compile(r"<(?:[^\W\d]|\$)[\w$:.-]*(?=[\s/><])(?!\s*(?:=|extends\b))")
+_JSX_OPENING = re.compile(r"<(?:[^\W\d]|\$)[\w$:.-]*(?=[\s/><])(?!\s*=)")
+_JSX_EXTENDS = re.compile(r"\s+extends\s+(?![=>])")
 _JSX_CLOSING = re.compile(r"</(?:[\w$][\w$:.-]*\s*)?>")
 _CLASS_VALUE_OPERATORS = {":", "=", "+=", "-=", "*=", "/=", "%=", "**=", "&=", "|=", "^=", "&&=", "||=", "??="}
 _PREFIX = {"keyof", "readonly", "unique", "typeof", "asserts", "abstract", "new"}
@@ -153,6 +154,20 @@ def _regex_context(tokens: list[_Token]) -> bool:
     return previous in _REGEX_PREFIX
 
 
+def _jsx_type_parameter_head(source: str, index: int) -> bool:
+    opening = _JSX_OPENING.match(source, index)
+    if not opening or not _JSX_EXTENDS.match(source, opening.end()):
+        return False
+    view = _RuntimeView(source[index : index + 8192], jsx=False)
+    end = view.angle_end(0)
+    if end is None or view.value(end) != "(" or end not in view.pairs:
+        return False
+    body = view.pairs[end] + 1
+    if view.value(body) == ":":
+        body = view.type_end(body + 1)
+    return body is not None and view.value(body) in {"=>", "{"}
+
+
 def _jsx_element(source: str, index: int, depth: int) -> _Token | None:
     """Read one complete element, exposing only its JavaScript expressions."""
     if depth > 80:
@@ -171,7 +186,7 @@ def _jsx_element(source: str, index: int, depth: int) -> _Token | None:
         name = source[index + 1 : opening.end()]
         index = opening.end()
         if index < len(source) and source[index] == "<":
-            arguments = _RuntimeView(source[index:], jsx=False)
+            arguments = _RuntimeView(source[index : index + 8192], jsx=False)
             end = arguments.angle_end(0)
             if end is None:
                 return None
@@ -255,9 +270,11 @@ def _lex(
         if char.isspace():
             index += 1
             continue
+        type_parameter_head = jsx and char == "<" and _jsx_type_parameter_head(source, index)
         if (
             jsx
             and char == "<"
+            and not type_parameter_head
             and _regex_context(tokens)
             and (_JSX_OPENING.match(source, index) or source.startswith("<>", index))
         ):
@@ -280,7 +297,7 @@ def _lex(
             continue
         if interpolation and char == "}" and not braces:
             return tokens, index, uncertain
-        if jsx and char == "<" and (opening := _JSX_OPENING.match(source, index)):
+        if jsx and char == "<" and not type_parameter_head and (opening := _JSX_OPENING.match(source, index)):
             jsx_tags.append((braces, opening.end()))
         elif char == ">" and jsx_tags and jsx_tags[-1][0] == braces:
             jsx_tags.pop()

@@ -268,21 +268,22 @@ _REQUIRE_PATTERN = re.compile(r"(?<![\w$.])require\(\s*['\"]([^'\"]+)['\"]\s*\)"
 # delimiter parsing separate from strings inside JavaScript expressions.
 _JS_LITERAL_PATTERN = re.compile(r"""'(?:\\[\s\S]|[^'\\\r\n])*'|"(?:\\[\s\S]|[^"\\\r\n])*"|`(?:\\[\s\S]|[^`\\])*`""")
 _JS_COMMENT_PATTERN = re.compile(r"//[^\r\n]*|/\*[\s\S]*?\*/")
-_JSX_TAG_PATTERN = re.compile(r"<(?:[^\W\d]|\$)[\w$:.-]*")
-_JSX_ATTRIBUTE_PATTERN = re.compile(r"[a-zA-Z_:][\w:.-]*")
+_JSX_TAG_PATTERN = re.compile(r"<(?:[^\W\d]|\$)[\w$:.-]*(?=[\s/>])")
+_JSX_ATTRIBUTE_PATTERN = re.compile(r"(?:[^\W\d]|[$:])[\w$:.-]*")
 _CLASS_PROPERTY_PATTERN = re.compile(r"""(?<![\w$])(?:className|class|['"]className['"]|['"]class['"])\s*:\s*""")
 _CLASSNAMES_CALL_PATTERN = re.compile(r"(?<![\w$])(?:classNames|clsx)\s*(?=\()")
 _JSX_ENTITY_PATTERN = re.compile(r"&(?:#[xX][0-9a-fA-F]+|#[0-9]+|[a-zA-Z][a-zA-Z0-9]*);")
 _HTML_CLASS_SPACE_PATTERN = re.compile(r"[ \t\r\n\f]+")
 
 
-def _js_delimited_end(content: str, start: int) -> int | None:
+def _js_delimited_end(content: str, start: int, *, limit: int | None = None) -> int | None:
     """Find a closing JS delimiter without treating quoted braces as syntax."""
     closing = {"{": "}", "[": "]", "(": ")"}
     stack = [closing[content[start]]]
     index = start + 1
-    while index < len(content):
-        skipped = _JS_LITERAL_PATTERN.match(content, index) or _JS_COMMENT_PATTERN.match(content, index)
+    limit = len(content) if limit is None else limit
+    while index < limit:
+        skipped = _JS_LITERAL_PATTERN.match(content, index, limit) or _JS_COMMENT_PATTERN.match(content, index, limit)
         if skipped:
             index = skipped.end()
             continue
@@ -356,14 +357,15 @@ def _jsx_class_attributes(content: str, attribute_positions: set[int] | None = N
     """
     for tag in _JSX_TAG_PATTERN.finditer(content):
         index = tag.end()
-        while index < len(content):
+        limit = min(len(content), tag.start() + 8192)
+        while index < limit:
             if content[index].isspace() or content[index] == "/":
                 index += 1
                 continue
             if content[index] == ">":
                 break
             if content[index] == "{":
-                end = _js_delimited_end(content, index)
+                end = _js_delimited_end(content, index, limit=limit)
                 if end is None:
                     yield False, None
                     break
@@ -371,27 +373,26 @@ def _jsx_class_attributes(content: str, attribute_positions: set[int] | None = N
                     yield False, None  # Spread props may supply any global class.
                 index = end
                 continue
-            name = _JSX_ATTRIBUTE_PATTERN.match(content, index)
+            name = _JSX_ATTRIBUTE_PATTERN.match(content, index, limit)
             if name is None:
-                index += 1
-                continue
+                break  # Not an attribute: do not walk the remaining file per candidate.
             wanted = name.group() in {"className", "class"}
             if wanted and attribute_positions is not None:
                 attribute_positions.add(name.start())
             index = name.end()
-            while index < len(content) and content[index].isspace():
+            while index < limit and content[index].isspace():
                 index += 1
-            if index >= len(content) or content[index] != "=":
+            if index >= limit or content[index] != "=":
                 continue
             index += 1
-            while index < len(content) and content[index].isspace():
+            while index < limit and content[index].isspace():
                 index += 1
-            if index == len(content):
+            if index == limit:
                 if wanted:
                     yield False, None
                 break
             if content[index] in "'\"":
-                end = content.find(content[index], index + 1)
+                end = content.find(content[index], index + 1, limit)
                 if end < 0:
                     if wanted:
                         yield False, None
@@ -400,7 +401,7 @@ def _jsx_class_attributes(content: str, attribute_positions: set[int] | None = N
                     yield True, content[index + 1 : end]
                 index = end + 1
             elif content[index] == "{":
-                end = _js_delimited_end(content, index)
+                end = _js_delimited_end(content, index, limit=limit)
                 if wanted:
                     yield False, content[index + 1 : end - 1] if end is not None else None
                 if end is None:
@@ -410,6 +411,8 @@ def _jsx_class_attributes(content: str, attribute_positions: set[int] | None = N
                 if wanted:
                     yield False, None
                 index += 1
+        if index >= limit and limit < len(content):
+            yield False, None  # An oversized header leaves possible global uses uncertain.
 
 
 # tsconfig paths for path aliases
