@@ -18,6 +18,8 @@ from pathlib import Path
 
 import pathspec
 
+from ._typescript import class_usage_source, class_value_positions
+
 # ── Data structures ───────────────────────────────────────────────────
 
 
@@ -291,6 +293,26 @@ def _js_delimited_end(content: str, start: int) -> int | None:
     return None
 
 
+def _class_property_value(content: str, start: int) -> str | None:
+    """Read a complete property expression, retaining uncertainty for operators."""
+    index = start
+    while index < len(content):
+        skipped = _JS_LITERAL_PATTERN.match(content, index) or _JS_COMMENT_PATTERN.match(content, index)
+        if skipped:
+            index = skipped.end()
+            continue
+        if content[index] in "{[(":
+            end = _js_delimited_end(content, index)
+            if end is None:
+                return None
+            index = end
+            continue
+        if content[index] in ",};)]":
+            break
+        index += 1
+    return content[start:index]
+
+
 def _decode_jsx_attribute(value: str) -> str | None:
     """Decode semicolon-terminated JSX entities once, without HTML error recovery."""
     valid = True
@@ -488,7 +510,7 @@ def _class_expression_values(expression: str, module_bindings: set[str]) -> tupl
 # Detect a CSS-module import so we know which source-file class accessors
 # correspond to module classes (``import styles from './x.module.css'``).
 _CSS_MODULE_IMPORT_PATTERN = re.compile(
-    r"""import\s+(?:type\s+)?([\w$]+)\s+from\s+['"]([^'"]*\.module\.css)['"]""",
+    r"""import\s+(?:\*\s+as\s+|\{\s*default\s+as\s+)?([\w$]+)(?:\s*\}|\s*,\s*\{[^}]*\})?\s+from\s+['"]([^'"]*\.module\.css)['"]""",
 )
 
 
@@ -579,13 +601,14 @@ class DeadCodeScanner:
 
             # Plain JS/TS can also export class props or classNames() values.
             if not self._is_css_file(rel_path):
-                self._parse_classname_usage(content, used_css_classes)
+                class_source = class_usage_source(content, rel_path)
+                self._parse_classname_usage(class_source, used_css_classes)
 
             # CSS modules can also be consumed by plain TypeScript/JavaScript
             # files, for example when exporting class-name maps to components.
             if not self._is_css_file(rel_path):
                 self._parse_css_module_usage(
-                    content, rel_path, file_set, used_css_module_classes, unresolved_css_module_classes
+                    class_source, rel_path, file_set, used_css_module_classes, unresolved_css_module_classes
                 )
 
             # Parse components
@@ -842,7 +865,10 @@ class DeadCodeScanner:
 
     def _parse_classname_usage(self, content: str, used_css_classes: set[str | None]) -> None:
         """Read raw JSX attributes and JavaScript literals using their own grammar."""
-        module_bindings = {match.group(1) for match in _CSS_MODULE_IMPORT_PATTERN.finditer(content)}
+        properties, calls, code_starts = class_value_positions(content)
+        module_bindings = {
+            match.group(1) for match in _CSS_MODULE_IMPORT_PATTERN.finditer(content) if match.start() in code_starts
+        }
 
         def consume(raw_jsx: bool, value: str | None) -> None:
             if value is None:
@@ -863,23 +889,11 @@ class DeadCodeScanner:
         for raw_jsx, value in _jsx_class_attributes(content):
             consume(raw_jsx, value)
         for property_match in _CLASS_PROPERTY_PATTERN.finditer(content):
-            literal = _JS_LITERAL_PATTERN.match(content, property_match.end())
-            consume(False, literal.group() if literal else None)
-            if literal:
-                index = literal.end()
-                while index < len(content):
-                    comment = _JS_COMMENT_PATTERN.match(content, index)
-                    if comment:
-                        index = comment.end()
-                    elif content[index].isspace():
-                        index += 1
-                    else:
-                        break
-                if index < len(content) and content[index] not in ",};)]":
-                    # A literal prefix followed by an operator or method call
-                    # does not determine the complete property value.
-                    used_css_classes.add(None)
+            if property_match.start() in properties:
+                consume(False, _class_property_value(content, property_match.end()))
         for call in _CLASSNAMES_CALL_PATTERN.finditer(content):
+            if call.start() not in calls:
+                continue
             end = _js_delimited_end(content, call.end())
             consume(False, content[call.start() : end] if end is not None else None)
 
@@ -910,7 +924,10 @@ class DeadCodeScanner:
         # Map the local binding (e.g. ``styles``) to a CSS-module import so
         # only module accessors are treated as class names.
         module_bindings: dict[str, Path | None] = {}
+        _, _, code_starts = class_value_positions(content)
         for match in _CSS_MODULE_IMPORT_PATTERN.finditer(content):
+            if match.start() not in code_starts:
+                continue
             stylesheet = self._resolve_relative_module(rel_path, match.group(2), file_set)
             if stylesheet is not None and stylesheet.endswith(".module.css"):
                 module_bindings[match.group(1)] = (self.project_dir / stylesheet).resolve()
@@ -920,6 +937,8 @@ class DeadCodeScanner:
             return
         recognized = set()
         for m in _CSS_MODULE_USAGE_PATTERN.finditer(content):
+            if m.start() not in code_starts:
+                continue
             binding, dot_name, bracket_literal = m.groups()
             if binding in module_bindings:
                 recognized.add(m.start())
@@ -931,7 +950,7 @@ class DeadCodeScanner:
                     used_css_module_classes.setdefault(stylesheet_path, set()).add(name)
         for binding, stylesheet_path in module_bindings.items():
             for match in re.finditer(rf"(?<![\w$]){re.escape(binding)}\s*(?:\?\.)?\s*\[", content):
-                if match.start() not in recognized:
+                if match.start() in code_starts and match.start() not in recognized:
                     if stylesheet_path is None:
                         unresolved_css_module_classes.add(None)
                     else:
