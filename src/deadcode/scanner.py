@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import re
+from bisect import bisect_right
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -29,6 +30,14 @@ class Finding:
     category: str  # unused_export, dead_route, orphaned_css, unreferenced_component
     detail: str = ""
     removable: bool = False  # Whether safe auto-removal is possible
+
+
+@dataclass(frozen=True)
+class _CssDefinition:
+    file: str
+    line: int
+    global_scope: bool
+    rule: int | None = None
 
 
 @dataclass
@@ -93,6 +102,84 @@ _ROUTE_PATTERN = re.compile(
 _CSS_CLASS_PATTERN = re.compile(
     r"\.([a-zA-Z_][\w-]*(?::[\w-]+)*)\s*(?:\{|,|\[)",
 )
+
+_CSS_NONCODE_PATTERN = re.compile(r"/\*[\s\S]*?\*/|'(?:\\.|[^'\\])*'|\"(?:\\.|[^\"\\])*\"")
+_CSS_SELECTOR_TOKEN_PATTERN = re.compile(r":(global|local)(?![\w-])|\.([a-zA-Z_][\w-]*)|[(),\[\]]")
+
+
+def _module_selector_classes(selector: str, inherited_global: bool):
+    """Yield each class's own scope, respecting functional and bare switches."""
+    global_scope = inherited_global
+    parentheses: list[tuple[bool, bool]] = []
+    pending_scope: bool | None = None
+    brackets = 0
+    for match in _CSS_SELECTOR_TOKEN_PATTERN.finditer(selector):
+        token = match.group()
+        if match.start() and selector[match.start() - 1] == "\\":
+            continue
+        if token == "[":
+            brackets += 1
+        elif token == "]":
+            brackets = max(0, brackets - 1)
+        elif brackets:
+            continue
+        elif match.group(1):
+            scope = match.group(1) == "global"
+            if selector[match.end() :].lstrip().startswith("("):
+                pending_scope = scope
+            else:
+                global_scope = scope
+        elif token == "(":
+            inner_scope = global_scope if pending_scope is None else pending_scope
+            parentheses.append((global_scope, inner_scope))
+            global_scope = inner_scope
+            pending_scope = None
+        elif token == ")":
+            if parentheses:
+                global_scope = parentheses.pop()[0]
+        elif token == ",":
+            global_scope = parentheses[-1][1] if parentheses else inherited_global
+        elif match.group(2):
+            yield match.group(2), match.start(), global_scope
+
+
+def _module_css_definitions(content: str, rel_path: str):
+    """Read selector headers without mistaking declaration strings for classes."""
+    masked = _CSS_NONCODE_PATTERN.sub(lambda match: re.sub(r"[^\n]", " ", match.group()), content)
+    lines = [0, *(match.end() for match in re.finditer("\n", content))]
+    scopes = [False]
+    start = 0
+    parentheses = brackets = 0
+    for match in re.finditer(r"[{};()\[\]]", masked):
+        token = match.group()
+        if token == "(":
+            parentheses += 1
+        elif token == ")":
+            parentheses = max(0, parentheses - 1)
+        elif token == "[":
+            brackets += 1
+        elif token == "]":
+            brackets = max(0, brackets - 1)
+        elif parentheses or brackets:
+            continue
+        elif token == "{":
+            selector = masked[start : match.start()]
+            if not selector.lstrip().startswith("@"):
+                for name, offset, global_scope in _module_selector_classes(selector, scopes[-1]):
+                    yield (
+                        name,
+                        _CssDefinition(rel_path, bisect_right(lines, start + offset), global_scope, match.start()),
+                    )
+            block_scope = {":global": True, ":local": False}.get(selector.strip(), scopes[-1])
+            scopes.append(block_scope)
+            start = match.end()
+        elif token == "}":
+            if len(scopes) > 1:
+                scopes.pop()
+            start = match.end()
+        else:
+            start = match.end()
+
 
 # import statements
 # Handles: import {Foo} from ..., import Foo from ..., import type {Foo} from ...,
@@ -219,7 +306,7 @@ class DeadCodeScanner:
         # Phase 1: Build export map and import map
         exports: dict[str, list[tuple[str, int]]] = {}  # name -> [(file, line)]
         imports: dict[str, set[str]] = {}  # name -> set of files that import it
-        css_classes: dict[str, list[tuple[str, int]]] = {}  # class -> [(file, line)]
+        css_classes: dict[str, list[_CssDefinition]] = {}
         used_css_classes: set[str] = set()
         used_css_module_classes: dict[Path, set[str]] = {}
         unresolved_css_module_classes: set[str] = set()
@@ -498,12 +585,16 @@ class DeadCodeScanner:
                 return candidate
         return None
 
-    def _parse_css_classes(self, content: str, rel_path: str, css_classes: dict[str, list[tuple[str, int]]]) -> None:
+    def _parse_css_classes(self, content: str, rel_path: str, css_classes: dict[str, list[_CssDefinition]]) -> None:
         """Extract CSS class names defined in a stylesheet."""
+        if rel_path.endswith(".module.css"):
+            for cls, definition in _module_css_definitions(content, rel_path):
+                css_classes.setdefault(cls, []).append(definition)
+            return
         for i, line in enumerate(content.splitlines(), 1):
             for m in _CSS_CLASS_PATTERN.finditer(line):
                 cls = m.group(1)
-                css_classes.setdefault(cls, []).append((rel_path, i))
+                css_classes.setdefault(cls, []).append(_CssDefinition(rel_path, i, True))
 
     def _parse_classname_usage(self, content: str, used_css_classes: set[str]) -> None:
         """Extract CSS class names used in JSX className attributes."""
@@ -680,7 +771,7 @@ class DeadCodeScanner:
 
     def _find_orphaned_css(
         self,
-        css_classes: dict[str, list[tuple[str, int]]],
+        css_classes: dict[str, list[_CssDefinition]],
         used_css_classes: set[str],
         used_css_module_classes: dict[Path, set[str]],
         unresolved_css_module_classes: set[str],
@@ -688,6 +779,9 @@ class DeadCodeScanner:
     ) -> None:
         """Find CSS classes defined but never used in JSX."""
         module_usage_by_file: dict[str, set[str]] = {}
+        protected_lines: set[tuple[str, int]] = set()
+        protected_rules: set[tuple[str, int]] = set()
+        unused: list[tuple[str, _CssDefinition, bool]] = []
         for cls, locations in css_classes.items():
             # Skip common utility classes and pseudo-selectors
             if cls.startswith(
@@ -704,31 +798,43 @@ class DeadCodeScanner:
                 )
             ):
                 continue
-            for file, line in locations:
-                if file.endswith(".module.css"):
+            for definition in locations:
+                file, line = definition.file, definition.line
+                if definition.global_scope:
+                    used = cls in used_css_classes
+                else:
                     if file not in module_usage_by_file:
                         module_usage_by_file[file] = used_css_module_classes.get(
                             (self.project_dir / file).resolve(), set()
                         )
-                    if cls in module_usage_by_file[file]:
-                        continue
-                elif cls in used_css_classes:
-                    continue
-                uncertain = file.endswith(".module.css") and cls in unresolved_css_module_classes
-                result.findings.append(
-                    Finding(
-                        file=file,
-                        line=line,
-                        name=cls,
-                        category="orphaned_css",
-                        detail=(
-                            f"CSS module class '.{cls}' may be used through an unresolved stylesheet import"
-                            if uncertain
-                            else f"CSS class '.{cls}' is not used in any JSX className"
-                        ),
-                        removable=not uncertain,
-                    )
+                    used = cls in module_usage_by_file[file]
+                uncertain = not definition.global_scope and cls in unresolved_css_module_classes
+                if used or uncertain:
+                    protected_lines.add((file, line))
+                    if definition.rule is not None:
+                        protected_rules.add((file, definition.rule))
+                if not used:
+                    unused.append((cls, definition, uncertain))
+        for cls, definition, uncertain in unused:
+            shared = (definition.file, definition.line) in protected_lines or (
+                definition.rule is not None and (definition.file, definition.rule) in protected_rules
+            )
+            result.findings.append(
+                Finding(
+                    file=definition.file,
+                    line=definition.line,
+                    name=cls,
+                    category="orphaned_css",
+                    detail=(
+                        f"CSS module class '.{cls}' may be used through an unresolved stylesheet import"
+                        if uncertain
+                        else f"CSS class '.{cls}' shares a rule or line with a used selector; remove manually"
+                        if shared
+                        else f"CSS class '.{cls}' is not used in any JSX className"
+                    ),
+                    removable=not (uncertain or shared),
                 )
+            )
 
     def _find_unreferenced_components(
         self,
