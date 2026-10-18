@@ -52,3 +52,23 @@ def test_quoted_jsx_and_javascript_do_not_invent_module_uses(tmp_path, extension
     findings = DeadCodeScanner(tmp_path).scan().orphaned_css
     assert {finding.name for finding in findings} == {"card"}
     assert all(finding.removable for finding in findings)
+
+
+@pytest.mark.parametrize("extension", ["ts", "tsx"])
+@pytest.mark.parametrize(
+    "declaration",
+    [
+        r"""function view<T = "escaped \" quote">() { return styles.card; }""",
+        r"""const view = <T = "escaped \" quote",>() => styles.card;""",
+        r"""const view = <T extends "escaped \" quote",>() => styles.card;""",
+        r"""const view = <T extends U = "escaped \" quote",>() => styles.card;""",
+    ],
+)
+def test_type_parameter_heads_keep_javascript_string_escaping(tmp_path, extension, declaration):
+    (tmp_path / "Card.module.css").write_text(".card {}\n.unused {}\n", encoding="utf-8")
+    (tmp_path / f"consumer.{extension}").write_text(
+        f"import styles from './Card.module.css';\n{declaration}\n", encoding="utf-8"
+    )
+    findings = DeadCodeScanner(tmp_path).scan().orphaned_css
+    assert {finding.name for finding in findings} == {"unused"}
+    assert all(finding.removable for finding in findings)
