@@ -126,3 +126,27 @@ def test_generic_and_unicode_jsx_keep_module_and_literal_classes(tmp_path, tag):
     findings = DeadCodeScanner(tmp_path).scan().orphaned_css
     assert {finding.name for finding in findings} == {"unused", "unusedGlobal"}
     assert all(finding.removable for finding in findings)
+
+
+@pytest.mark.parametrize("extension", ["tsx", "jsx"])
+@pytest.mark.parametrize("tag", ["_Button", "$Button", "Button$", "Élément"])
+def test_all_jsx_identifier_forms_keep_raw_attribute_grammar(tmp_path, monkeypatch, extension, tag):
+    view = rf'<{tag} data-path="C:\" className={{styles.card}} />'
+    test_raw_jsx_attribute_quotes_preserve_live_module_rules(tmp_path, monkeypatch, extension, view)
+
+
+@pytest.mark.parametrize("extension", ["ts", "tsx"])
+@pytest.mark.parametrize(
+    "expression,live",
+    [("a < styles.card > (b)", False), ("(a < styles.card) > b", True), ("a < styles.card > b", True)],
+)
+def test_angle_expression_usage_agrees_with_typescript_emission(tmp_path, extension, expression, live):
+    # TypeScript 5.9.3 emits a(b) for the first expression, and preserves the
+    # two explicitly relational forms. Whitespace does not change that grammar.
+    (tmp_path / "Card.module.css").write_text(".card {}\n", encoding="utf-8")
+    (tmp_path / f"consumer.{extension}").write_text(
+        f"import styles from './Card.module.css';\nconst value = {expression};\n", encoding="utf-8"
+    )
+    findings = DeadCodeScanner(tmp_path).scan().orphaned_css
+    assert bool(findings) is not live
+    assert all(finding.name == "card" and finding.removable for finding in findings)
