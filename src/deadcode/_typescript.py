@@ -24,6 +24,7 @@ class _Token:
 
 
 _WORD = re.compile(r"[\w$]+", re.UNICODE)
+_JSX_OPENING = re.compile(r"<[a-zA-Z][\w:.-]*(?=[\s/>])")
 _JSX_CLOSING = re.compile(r"</(?:[\w$][\w$:.-]*\s*)?>")
 _CLASS_VALUE_OPERATORS = {":", "=", "+=", "-=", "*=", "/=", "%=", "**=", "&=", "|=", "^=", "&&=", "||=", "??="}
 _PREFIX = {"keyof", "readonly", "unique", "typeof", "asserts", "abstract", "new"}
@@ -155,6 +156,7 @@ def _lex(source: str, index: int = 0, *, interpolation: bool = False, depth: int
     tokens = []
     braces = 0
     uncertain = False
+    jsx_tags: list[int] = []
     while index < len(source):
         start = index
         char = source[index]
@@ -171,6 +173,10 @@ def _lex(source: str, index: int = 0, *, interpolation: bool = False, depth: int
             continue
         if interpolation and char == "}" and not braces:
             return tokens, index, uncertain
+        if char == "<" and _JSX_OPENING.match(source, index):
+            jsx_tags.append(braces)
+        elif char == ">" and jsx_tags and jsx_tags[-1] == braces:
+            jsx_tags.pop()
         if char == "{":
             braces += 1
         elif char == "}":
@@ -213,16 +219,20 @@ def _lex(source: str, index: int = 0, *, interpolation: bool = False, depth: int
             )
             continue
         if char in "'\"":
+            # JSX attribute delimiters follow HTML rules: a backslash before
+            # the closing quote is literal. JavaScript expressions inside
+            # braces still use the ordinary escaped-string grammar.
+            raw_attribute = bool(jsx_tags and jsx_tags[-1] == braces and tokens and tokens[-1].value == "=")
             index += 1
             complete = False
             while index < len(source):
-                if source[index] == "\\":
+                if source[index] == "\\" and not raw_attribute:
                     index += 2
                 elif source[index] == char:
                     index += 1
                     complete = True
                     break
-                elif source[index] in "\r\n":
+                elif source[index] in "\r\n" and not raw_attribute:
                     break
                 else:
                     index += 1
