@@ -41,6 +41,7 @@ class _CssDefinition:
     line: int
     global_scope: bool
     rule: int | None = None
+    multiline_header: bool = False
 
 
 @dataclass
@@ -195,11 +196,15 @@ def _module_css_definitions(content: str, rel_path: str):
             continue
         elif token == "{":
             selector = masked[start : match.start()]
+            selector_start = start + len(selector) - len(selector.lstrip())
+            multiline_header = bisect_right(lines, selector_start) != bisect_right(lines, match.start())
             if not selector.lstrip().startswith("@"):
                 for name, offset, global_scope in _module_selector_classes(selector, scopes[-1]):
                     yield (
                         name,
-                        _CssDefinition(rel_path, bisect_right(lines, start + offset), global_scope, match.start()),
+                        _CssDefinition(
+                            rel_path, bisect_right(lines, start + offset), global_scope, match.start(), multiline_header
+                        ),
                     )
             block_scope = {":global": True, ":local": False}.get(selector.strip(), scopes[-1])
             scopes.append(block_scope)
@@ -604,7 +609,7 @@ class DeadCodeScanner:
             # Plain JS/TS can also export class props or classNames() values.
             if not self._is_css_file(rel_path):
                 class_source = class_usage_source(content, rel_path)
-                self._parse_classname_usage(class_source, used_css_classes)
+                self._parse_classname_usage(class_source, used_css_classes, jsx=not rel_path.endswith(".ts"))
 
             # CSS modules can also be consumed by plain TypeScript/JavaScript
             # files, for example when exporting class-name maps to components.
@@ -865,9 +870,9 @@ class DeadCodeScanner:
                 cls = _decode_css_identifier(identifier)
                 css_classes.setdefault(cls, []).append(_CssDefinition(rel_path, i, True))
 
-    def _parse_classname_usage(self, content: str, used_css_classes: set[str | None]) -> None:
+    def _parse_classname_usage(self, content: str, used_css_classes: set[str | None], *, jsx: bool = True) -> None:
         """Read raw JSX attributes and JavaScript literals using their own grammar."""
-        properties, calls, code_starts = class_value_positions(content)
+        properties, calls, code_starts = class_value_positions(content, jsx=jsx)
         module_bindings = {
             match.group(1) for match in _CSS_MODULE_IMPORT_PATTERN.finditer(content) if match.start() in code_starts
         }
@@ -894,7 +899,7 @@ class DeadCodeScanner:
         for property_match in _CLASS_PROPERTY_PATTERN.finditer(content):
             if property_match.start() in properties:
                 consume(False, _class_property_value(content, property_match.end()))
-        for key, key_start, start, compound in class_property_positions(content):
+        for key, key_start, start, compound in class_property_positions(content, jsx=jsx):
             if key_start in jsx_properties:
                 continue  # The JSX reader has already consumed its own grammar.
             name = _decode_js_string(key) if key[:1] in {"'", '"', "`"} else key
@@ -933,7 +938,7 @@ class DeadCodeScanner:
         # Map the local binding (e.g. ``styles``) to a CSS-module import so
         # only module accessors are treated as class names.
         module_bindings: dict[str, Path | None] = {}
-        _, _, code_starts = class_value_positions(content)
+        _, _, code_starts = class_value_positions(content, jsx=not rel_path.endswith(".ts"))
         for match in _CSS_MODULE_IMPORT_PATTERN.finditer(content):
             if match.start() not in code_starts:
                 continue
@@ -1161,9 +1166,11 @@ class DeadCodeScanner:
                         if uncertain
                         else f"CSS class '.{cls}' shares a rule or line with a used selector; remove manually"
                         if shared
+                        else f"CSS class '.{cls}' has a selector across multiple lines; remove manually"
+                        if definition.multiline_header
                         else f"CSS class '.{cls}' is not used in any JSX className"
                     ),
-                    removable=not (uncertain or shared),
+                    removable=not (uncertain or shared or definition.multiline_header),
                 )
             )
 

@@ -72,3 +72,42 @@ def test_type_parameter_heads_keep_javascript_string_escaping(tmp_path, extensio
     findings = DeadCodeScanner(tmp_path).scan().orphaned_css
     assert {finding.name for finding in findings} == {"unused"}
     assert all(finding.removable for finding in findings)
+
+
+@pytest.mark.parametrize("extension", ["tsx", "jsx"])
+@pytest.mark.parametrize(
+    "view",
+    [
+        "<p>It's <span className={styles.card} /></p>",
+        '<p>He said "hello <span className={styles.card} /></p>',
+        "<p>https://example.test <span className={styles.card} /></p>",
+        "<p>/* raw child prose <span className={styles.card} /></p>",
+        "<p>`raw child prose <span className={styles.card} /></p>",
+        "<>It's {flag ? <span className={styles.card} /> : null}</>",
+        '<p>It\'s {"quoted \\" value"}<span className={styles.card} /></p>',
+        "<p>It's a child</p>; element.className = styles.card",
+    ],
+)
+def test_jsx_child_text_preserves_live_rules_and_following_code(tmp_path, monkeypatch, extension, view):
+    test_raw_jsx_attribute_quotes_preserve_live_module_rules(tmp_path, monkeypatch, extension, view)
+
+
+@pytest.mark.parametrize("extension", ["tsx", "jsx"])
+def test_jsx_child_prose_does_not_invent_module_access(tmp_path, extension):
+    (tmp_path / "Card.module.css").write_text(".card {}\n", encoding="utf-8")
+    (tmp_path / f"consumer.{extension}").write_text(
+        "import styles from './Card.module.css';\nconst View=()=> <p>It's styles.card // prose /* text */ `text`</p>;\n",
+        encoding="utf-8",
+    )
+    findings = DeadCodeScanner(tmp_path).scan().orphaned_css
+    assert len(findings) == 1 and findings[0].name == "card" and findings[0].removable
+
+
+def test_typescript_assertion_with_apparent_closing_tag_keeps_live_access(tmp_path):
+    (tmp_path / "Card.module.css").write_text(".card {}\n.unused {}\n", encoding="utf-8")
+    (tmp_path / "consumer.ts").write_text(
+        "import styles from './Card.module.css';\nconst selected=<T>render(\"</T>\"); const live=styles.card;\n",
+        encoding="utf-8",
+    )
+    findings = DeadCodeScanner(tmp_path).scan().orphaned_css
+    assert {finding.name for finding in findings} == {"unused"}

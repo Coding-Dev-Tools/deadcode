@@ -152,7 +152,78 @@ def _regex_context(tokens: list[_Token]) -> bool:
     return previous in _REGEX_PREFIX
 
 
-def _lex(source: str, index: int = 0, *, interpolation: bool = False, depth: int = 0) -> tuple[list[_Token], int, bool]:
+def _jsx_element(source: str, index: int, depth: int) -> _Token | None:
+    """Read one complete element, exposing only its JavaScript expressions."""
+    if depth > 80:
+        return None
+    start = index
+    expressions = []
+    uncertain = False
+    if source.startswith("<>", index):
+        name = ""
+        index += 2
+    else:
+        opening = _JSX_OPENING.match(source, index)
+        if not opening:
+            return None
+        name = source[index + 1 : opening.end()]
+        index = opening.end()
+        while index < len(source):
+            if source.startswith("/>", index):
+                return _Token(
+                    source[start : index + 2], start, index + 2, expressions=tuple(expressions), uncertain=uncertain
+                )
+            if source[index] == ">":
+                index += 1
+                break
+            if source[index] in "'\"":
+                end = source.find(source[index], index + 1)
+                if end < 0:
+                    return None
+                index = end + 1
+            elif source[index] == "{":
+                _, end, nested_uncertain = _lex(source, index + 1, interpolation=True, depth=depth + 1, jsx=True)
+                if end >= len(source):
+                    return None
+                expressions.append((index + 1, end))
+                uncertain |= nested_uncertain
+                index = end + 1
+            elif source[index] == "<":
+                return None  # Generic JSX arguments retain the existing token path.
+            else:
+                index += 1
+        else:
+            return None
+    while index < len(source):
+        if source.startswith("</", index):
+            closing = _JSX_CLOSING.match(source, index)
+            if not closing or source[index + 2 : closing.end() - 1].strip() != name:
+                return None
+            return _Token(
+                source[start : closing.end()], start, closing.end(), expressions=tuple(expressions), uncertain=uncertain
+            )
+        if source[index] == "<":
+            child = _jsx_element(source, index, depth + 1)
+            if child is None:
+                return None
+            expressions.extend(child.expressions)
+            uncertain |= child.uncertain
+            index = child.end
+        elif source[index] == "{":
+            _, end, nested_uncertain = _lex(source, index + 1, interpolation=True, depth=depth + 1, jsx=True)
+            if end >= len(source):
+                return None
+            expressions.append((index + 1, end))
+            uncertain |= nested_uncertain
+            index = end + 1
+        else:
+            index += 1  # Child text has no JavaScript quotes, comments or templates.
+    return None
+
+
+def _lex(
+    source: str, index: int = 0, *, interpolation: bool = False, depth: int = 0, jsx: bool = True
+) -> tuple[list[_Token], int, bool]:
     tokens = []
     braces = 0
     uncertain = False
@@ -163,6 +234,21 @@ def _lex(source: str, index: int = 0, *, interpolation: bool = False, depth: int
         if char.isspace():
             index += 1
             continue
+        if (
+            jsx
+            and char == "<"
+            and _regex_context(tokens)
+            and (_JSX_OPENING.match(source, index) or source.startswith("<>", index))
+        ):
+            element = _jsx_element(source, index, depth + 1)
+            if element:
+                tokens.append(element)
+                index = element.end
+                uncertain |= element.uncertain
+                continue
+            # Incomplete JSX cannot establish that a later runtime use is absent.
+            tokens.append(_Token(source[start:], start, len(source), complete=False, uncertain=True))
+            return tokens, len(source), True
         if source.startswith("//", index):
             end = source.find("\n", index + 2)
             index = len(source) if end < 0 else end
@@ -173,7 +259,7 @@ def _lex(source: str, index: int = 0, *, interpolation: bool = False, depth: int
             continue
         if interpolation and char == "}" and not braces:
             return tokens, index, uncertain
-        if char == "<" and (opening := _JSX_OPENING.match(source, index)):
+        if jsx and char == "<" and (opening := _JSX_OPENING.match(source, index)):
             jsx_tags.append((braces, opening.end()))
         elif char == ">" and jsx_tags and jsx_tags[-1][0] == braces:
             jsx_tags.pop()
@@ -198,7 +284,7 @@ def _lex(source: str, index: int = 0, *, interpolation: bool = False, depth: int
                         index = len(source)
                         break
                     expression = index + 2
-                    _, end, nested_uncertain = _lex(source, expression, interpolation=True, depth=depth + 1)
+                    _, end, nested_uncertain = _lex(source, expression, interpolation=True, depth=depth + 1, jsx=jsx)
                     template_uncertain |= nested_uncertain
                     if end == len(source):
                         index = end
@@ -324,14 +410,14 @@ def _lex(source: str, index: int = 0, *, interpolation: bool = False, depth: int
     return tokens, index, uncertain
 
 
-def _tokens(source: str) -> list[_Token]:
-    return _lex(source)[0]
+def _tokens(source: str, *, jsx: bool = True) -> list[_Token]:
+    return _lex(source, jsx=jsx)[0]
 
 
 class _RuntimeView:
-    def __init__(self, source: str):
+    def __init__(self, source: str, *, jsx: bool = True):
         self.source = source
-        self.tokens = _tokens(source)
+        self.tokens = _tokens(source, jsx=jsx)
         self.pairs: dict[int, int] = {}
         self.parents: dict[int, int | None] = {}
         stack = []
@@ -810,7 +896,7 @@ def class_usage_source(source: str, path: str, *, depth: int = 0) -> str:
         return re.sub(r"[^\r\n]", " ", source)
     if depth > 80:
         return source
-    view = _RuntimeView(source)
+    view = _RuntimeView(source, jsx=not path.endswith(".ts"))
     typescript = path.endswith((".ts", ".tsx"))
     if typescript:
         view.declarations()
@@ -820,9 +906,9 @@ def class_usage_source(source: str, path: str, *, depth: int = 0) -> str:
     return view.render(path, depth)
 
 
-def class_value_positions(source: str, *, depth: int = 0) -> tuple[set[int], set[int], set[int]]:
+def class_value_positions(source: str, *, depth: int = 0, jsx: bool = True) -> tuple[set[int], set[int], set[int]]:
     """Recognize code-token starts, excluding comments, strings and regex bodies."""
-    tokens = _tokens(source)
+    tokens = _tokens(source, jsx=jsx)
     property_keys = {
         token.start
         for token in tokens
@@ -846,7 +932,7 @@ def class_value_positions(source: str, *, depth: int = 0) -> tuple[set[int], set
         elif token.expressions:
             for start, end in token.expressions:
                 nested_properties, nested_calls, nested_words = class_value_positions(
-                    source[start:end], depth=depth + 1
+                    source[start:end], depth=depth + 1, jsx=jsx
                 )
                 property_keys.update(start + value for value in nested_properties)
                 calls.update(start + value for value in nested_calls)
@@ -854,14 +940,14 @@ def class_value_positions(source: str, *, depth: int = 0) -> tuple[set[int], set
     return property_keys, calls, words
 
 
-def class_property_positions(source: str, *, depth: int = 0) -> list[tuple[str, int, int, bool]]:
+def class_property_positions(source: str, *, depth: int = 0, jsx: bool = True) -> list[tuple[str, int, int, bool]]:
     """Return class property/write keys, offsets and compound uncertainty.
 
     Comments are already skipped by the lexer. Exact assignment operators avoid
     treating equality tests or arrows as writes; quoted member keys are decoded
     by the caller's existing JavaScript string reader.
     """
-    tokens = _tokens(source)
+    tokens = _tokens(source, jsx=jsx)
     assignments = []
     for index, token in enumerate(tokens):
         operator = index + 1
@@ -886,7 +972,7 @@ def class_property_positions(source: str, *, depth: int = 0) -> list[tuple[str, 
                 assignments.extend(
                     (key, start + key_offset, start + offset, compound)
                     for key, key_offset, offset, compound in class_property_positions(
-                        source[start:end], depth=depth + 1
+                        source[start:end], depth=depth + 1, jsx=jsx
                     )
                 )
         elif token.uncertain and re.search(r"\b(?:className|class)\b[\s\S]*=", token.value):
