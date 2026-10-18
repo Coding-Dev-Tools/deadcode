@@ -12,7 +12,7 @@ from __future__ import annotations
 import os
 import re
 from bisect import bisect_right
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from html.entities import name2codepoint
 from pathlib import Path
 
@@ -42,6 +42,7 @@ class _CssDefinition:
     global_scope: bool
     rule: int | None = None
     multiline_header: bool = False
+    single_line_rule: bool = True
 
 
 @dataclass
@@ -178,6 +179,9 @@ def _module_css_definitions(content: str, rel_path: str):
     )
     lines = [0, *(match.end() for match in re.finditer("\n", content))]
     scopes = [False]
+    # Removal deletes the finding's line, so wait for the complete rule boundary.
+    definitions: list[tuple[str, _CssDefinition]] = []
+    rule_members: list[list[int]] = [[]]
     start = 0
     parentheses = brackets = 0
     for match in _CSS_BLOCK_TOKEN_PATTERN.finditer(masked):
@@ -198,23 +202,38 @@ def _module_css_definitions(content: str, rel_path: str):
             selector = masked[start : match.start()]
             selector_start = start + len(selector) - len(selector.lstrip())
             multiline_header = bisect_right(lines, selector_start) != bisect_right(lines, match.start())
+            members = []
             if not selector.lstrip().startswith("@"):
                 for name, offset, global_scope in _module_selector_classes(selector, scopes[-1]):
-                    yield (
-                        name,
-                        _CssDefinition(
-                            rel_path, bisect_right(lines, start + offset), global_scope, match.start(), multiline_header
-                        ),
+                    members.append(len(definitions))
+                    definitions.append(
+                        (
+                            name,
+                            _CssDefinition(
+                                rel_path,
+                                bisect_right(lines, start + offset),
+                                global_scope,
+                                match.start(),
+                                multiline_header,
+                                single_line_rule=False,
+                            ),
+                        )
                     )
             block_scope = {":global": True, ":local": False}.get(selector.strip(), scopes[-1])
             scopes.append(block_scope)
+            rule_members.append(members)
             start = match.end()
         elif token == "}":
             if len(scopes) > 1:
                 scopes.pop()
+                closing_line = bisect_right(lines, match.start())
+                for member in rule_members.pop():
+                    name, definition = definitions[member]
+                    definitions[member] = (name, replace(definition, single_line_rule=definition.line == closing_line))
             start = match.end()
         else:
             start = match.end()
+    yield from definitions
 
 
 # import statements
@@ -1173,9 +1192,13 @@ class DeadCodeScanner:
                         if shared
                         else f"CSS class '.{cls}' has a selector across multiple lines; remove manually"
                         if definition.multiline_header
+                        else f"CSS class '.{cls}' has no complete one-line rule; remove manually"
+                        if not definition.single_line_rule
                         else f"CSS class '.{cls}' is not used in any JSX className"
                     ),
-                    removable=not (uncertain or shared or definition.multiline_header),
+                    removable=not (
+                        uncertain or shared or definition.multiline_header or not definition.single_line_rule
+                    ),
                 )
             )
 
