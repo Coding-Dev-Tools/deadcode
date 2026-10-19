@@ -19,9 +19,7 @@ def _make_project(tmp_path: Path, consumer_source: str) -> Path:
     """utils.ts defines two exports; main.ts consumes it per consumer_source."""
     utils = tmp_path / "src" / "utils.ts"
     utils.parent.mkdir(parents=True, exist_ok=True)
-    utils.write_text(
-        "export function helper() { return 1; }\nexport const RATE = 2;\n"
-    )
+    utils.write_text("export function helper() { return 1; }\nexport const RATE = 2;\n")
     main = tmp_path / "src" / "main.ts"
     main.write_text(consumer_source)
     return tmp_path
@@ -40,8 +38,7 @@ class TestNamespaceImports:
     def test_namespace_import_marks_all_exports_used(self, tmp_path):
         project = _make_project(
             tmp_path,
-            "import * as Utils from './utils';\n\n"
-            "const total = Utils.helper() + Utils.RATE;\nexport default total;\n",
+            "import * as Utils from './utils';\n\nconst total = Utils.helper() + Utils.RATE;\nexport default total;\n",
         )
         # Neither utils.ts export may be flagged: both are consumed via the
         # namespace binding.
@@ -87,10 +84,7 @@ class TestDynamicAndRequireImports:
     def test_dynamic_import_marks_all_exports_used(self, tmp_path):
         project = _make_project(
             tmp_path,
-            "export async function load() {\n"
-            "  const u = await import('./utils');\n"
-            "  return u.helper() + u.RATE;\n"
-            "}\n",
+            "export async function load() {\n  const u = await import('./utils');\n  return u.helper() + u.RATE;\n}\n",
         )
         assert not [f for _n, f in _unused_names(project) if f.endswith("utils.ts")]
 

@@ -11,10 +11,14 @@ from __future__ import annotations
 
 import os
 import re
-from dataclasses import dataclass, field
+from bisect import bisect_right
+from dataclasses import dataclass, field, replace
+from html.entities import name2codepoint
 from pathlib import Path
 
 import pathspec
+
+from ._typescript import class_property_positions, class_usage_source, class_value_positions
 
 # ── Data structures ───────────────────────────────────────────────────
 
@@ -29,6 +33,16 @@ class Finding:
     category: str  # unused_export, dead_route, orphaned_css, unreferenced_component
     detail: str = ""
     removable: bool = False  # Whether safe auto-removal is possible
+
+
+@dataclass(frozen=True)
+class _CssDefinition:
+    file: str
+    line: int
+    global_scope: bool
+    rule: int | None = None
+    multiline_header: bool = False
+    single_line_rule: bool = True
 
 
 @dataclass
@@ -89,10 +103,214 @@ _ROUTE_PATTERN = re.compile(
     r"(?:app|src/app|pages|src/pages)/(.*?)/(?:page|route)\.(?:tsx|ts|jsx|js)$",
 )
 
-# CSS class selectors (supports Tailwind utility classes with colon-separated segments like hover:bg-red)
+# CSS escapes include up to six hexadecimal digits and their optional single
+# whitespace terminator. Consume them inside the identifier before interpreting
+# punctuation as selector syntax (for example, .foo\\:bar and .foo\\.bar).
+_CSS_ESCAPE = r"\\(?:[0-9a-fA-F]{1,6}(?:\r\n|[ \t\r\n\f])?|[^\r\n\f0-9a-fA-F])"
+_CSS_NAME_START = rf"(?:[a-zA-Z_]|[^\x00-\x7f]|{_CSS_ESCAPE})"
+_CSS_NAME_CHAR = rf"(?:[a-zA-Z0-9_-]|[^\x00-\x7f]|{_CSS_ESCAPE})"
+_CSS_IDENTIFIER = rf"(?:--|-?{_CSS_NAME_START}){_CSS_NAME_CHAR}*"
+_CSS_IDENTIFIER_PATTERN = re.compile(_CSS_IDENTIFIER)
+_CSS_ESCAPE_PATTERN = re.compile(_CSS_ESCAPE)
+
+# Preserve the existing global utility-prefix handling as well as escaped names.
 _CSS_CLASS_PATTERN = re.compile(
-    r"\.([a-zA-Z_][\w-]*(?::[\w-]+)*)\s*(?:\{|,|\[)",
+    rf"\.({_CSS_IDENTIFIER}(?::{_CSS_IDENTIFIER})*)\s*(?:\{{|,|\[)",
 )
+
+_CSS_NONCODE_PATTERN = re.compile(_CSS_ESCAPE + r"|/\*[\s\S]*?\*/|'(?:\\[\s\S]|[^'\\])*'|\"(?:\\[\s\S]|[^\"\\])*\"")
+_CSS_SELECTOR_TOKEN_PATTERN = re.compile(
+    rf"{_CSS_ESCAPE}|:(global|local)(?![\w-]|[^\x00-\x7f]|\\)|\.({_CSS_IDENTIFIER})|[(),\[\]]"
+)
+_CSS_BLOCK_TOKEN_PATTERN = re.compile(_CSS_ESCAPE + r"|[{};()\[\]]")
+# Whole-line removal needs every selector alternative to depend on a class
+# whose usage the scanner represents. Element/ID alternatives and arbitrary
+# pseudo-selectors remain diagnostic-only instead of losing unrelated styles.
+_CSS_REMOVABLE_SELECTOR = (
+    rf"(?:\.{_CSS_IDENTIFIER}|:(?:global|local)(?:\(\s*\.{_CSS_IDENTIFIER}\s*\)|\s+\.{_CSS_IDENTIFIER}))"
+)
+_CSS_REMOVABLE_HEADER = re.compile(rf"\s*{_CSS_REMOVABLE_SELECTOR}(?:\s*,\s*{_CSS_REMOVABLE_SELECTOR})*\s*")
+
+
+def _decode_css_identifier(identifier: str) -> str:
+    """Decode CSS Syntax escapes, replacing invalid escaped Unicode scalars."""
+
+    def unescape(match: re.Match) -> str:
+        value = match.group()[1:]
+        if value[0] in "0123456789abcdefABCDEF":
+            codepoint = int(value.rstrip(" \t\r\n\f"), 16)
+            return chr(codepoint) if 0 < codepoint <= 0x10FFFF and not 0xD800 <= codepoint <= 0xDFFF else "�"
+        return value
+
+    return _CSS_ESCAPE_PATTERN.sub(unescape, identifier)
+
+
+def _module_selector_classes(selector: str, inherited_global: bool):
+    """Yield each class's own scope, respecting functional and bare switches."""
+    global_scope = inherited_global
+    parentheses: list[tuple[bool, bool]] = []
+    pending_scope: bool | None = None
+    brackets = 0
+    for match in _CSS_SELECTOR_TOKEN_PATTERN.finditer(selector):
+        token = match.group()
+        if token == "[":
+            brackets += 1
+        elif token == "]":
+            brackets = max(0, brackets - 1)
+        elif brackets:
+            continue
+        elif match.group(1):
+            scope = match.group(1) == "global"
+            if selector[match.end() :].lstrip().startswith("("):
+                pending_scope = scope
+            else:
+                global_scope = scope
+        elif token == "(":
+            inner_scope = global_scope if pending_scope is None else pending_scope
+            parentheses.append((global_scope, inner_scope))
+            global_scope = inner_scope
+            pending_scope = None
+        elif token == ")":
+            if parentheses:
+                global_scope = parentheses.pop()[0]
+        elif token == ",":
+            global_scope = parentheses[-1][1] if parentheses else inherited_global
+        elif match.group(2):
+            yield _decode_css_identifier(match.group(2)), match.start(), global_scope
+
+
+def _module_css_definitions(content: str, rel_path: str):
+    """Read selector headers without mistaking declaration strings for classes."""
+    masked = _CSS_NONCODE_PATTERN.sub(
+        lambda match: match.group() if match.group().startswith("\\") else re.sub(r"[^\n]", " ", match.group()), content
+    )
+    lines = [0, *(match.end() for match in re.finditer("\n", content))]
+    scopes = [False]
+    # Removal deletes the finding's line, so wait for the complete rule boundary.
+    definitions: list[tuple[str, _CssDefinition]] = []
+    rule_members: list[list[int]] = [[]]
+    start = 0
+    parentheses = brackets = 0
+    for match in _CSS_BLOCK_TOKEN_PATTERN.finditer(masked):
+        token = match.group()
+        if token.startswith("\\"):
+            continue
+        if token == "(":
+            parentheses += 1
+        elif token == ")":
+            parentheses = max(0, parentheses - 1)
+        elif token == "[":
+            brackets += 1
+        elif token == "]":
+            brackets = max(0, brackets - 1)
+        elif parentheses or brackets:
+            continue
+        elif token == "{":
+            selector = masked[start : match.start()]
+            selector_start = start + len(selector) - len(selector.lstrip())
+            multiline_header = bisect_right(lines, selector_start) != bisect_right(lines, match.start())
+            members = []
+            if not selector.lstrip().startswith("@"):
+                for name, offset, global_scope in _module_selector_classes(selector, scopes[-1]):
+                    members.append(len(definitions))
+                    definitions.append(
+                        (
+                            name,
+                            _CssDefinition(
+                                rel_path,
+                                bisect_right(lines, start + offset),
+                                global_scope,
+                                match.start(),
+                                multiline_header,
+                                single_line_rule=False,
+                            ),
+                        )
+                    )
+            block_scope = {":global": True, ":local": False}.get(selector.strip(), scopes[-1])
+            scopes.append(block_scope)
+            rule_members.append(members)
+            start = match.end()
+        elif token == "}":
+            if len(scopes) > 1:
+                scopes.pop()
+                closing_line = bisect_right(lines, match.start())
+                for member in rule_members.pop():
+                    name, definition = definitions[member]
+                    definitions[member] = (name, replace(definition, single_line_rule=definition.line == closing_line))
+            start = match.end()
+        else:
+            start = match.end()
+    yield from definitions
+
+
+def _css_rule_spans(content: str):
+    """Map complete rules and identify those safe for whole-line removal."""
+    masked = _CSS_NONCODE_PATTERN.sub(
+        lambda match: match.group() if match.group().startswith("\\") else re.sub(r"[^\n]", " ", match.group()), content
+    )
+    lines = [0, *(match.end() for match in re.finditer("\n", content))]
+    # Keep multiline comment edges substantive: deleting a line containing
+    # either delimiter can corrupt neighboring lines outside the rule span.
+    comments_masked = _CSS_NONCODE_PATTERN.sub(
+        lambda match: (
+            " " * len(match.group()) if match.group().startswith("/*") and "\n" not in match.group() else match.group()
+        ),
+        content,
+    )
+    spans: list[tuple[int, int, int | None]] = []
+    standalone_rules: set[int] = set()
+    line_bounds: dict[int, tuple[int, int]] = {}
+    blocks: list[int | None] = []
+    start = 0
+    parentheses = brackets = 0
+    for match in _CSS_BLOCK_TOKEN_PATTERN.finditer(masked):
+        token = match.group()
+        if token.startswith("\\"):
+            continue
+        if token == "(":
+            parentheses += 1
+        elif token == ")":
+            parentheses = max(0, parentheses - 1)
+        elif token == "[":
+            brackets += 1
+        elif token == "]":
+            brackets = max(0, brackets - 1)
+        elif parentheses or brackets:
+            continue
+        elif token == "{":
+            selector = masked[start : match.start()]
+            selector_start = start + len(selector) - len(selector.lstrip())
+            if selector.strip() and not selector.lstrip().startswith("@"):
+                blocks.append(len(spans))
+                spans.append((selector_start, match.start(), None))
+            else:
+                blocks.append(None)
+            start = match.end()
+        elif token == "}":
+            if blocks and (index := blocks.pop()) is not None:
+                header_start, opening, _ = spans[index]
+                closing_line = bisect_right(lines, match.start())
+                spans[index] = (header_start, opening, closing_line)
+                if closing_line not in line_bounds:
+                    line_start = lines[closing_line - 1]
+                    line_end = lines[closing_line] if closing_line < len(lines) else len(content)
+                    line = comments_masked[line_start:line_end]
+                    line_bounds[closing_line] = (
+                        line_start + len(line) - len(line.lstrip()),
+                        line_start + len(line.rstrip()),
+                    )
+                # Neither sibling rules, directives nor enclosing braces can
+                # survive the CLI's whole-line deletion. Only comments and
+                # whitespace may surround the candidate's complete rule span.
+                if line_bounds[closing_line] == (header_start, match.end()) and _CSS_REMOVABLE_HEADER.fullmatch(
+                    masked[header_start:opening]
+                ):
+                    standalone_rules.add(opening)
+            start = match.end()
+        else:
+            start = match.end()
+    return spans, lines, standalone_rules
+
 
 # import statements
 # Handles: import {Foo} from ..., import Foo from ..., import type {Foo} from ...,
@@ -126,15 +344,11 @@ _REEXPORT_PATTERN = re.compile(
 # the whole export surface of the target module counts as consumed; otherwise
 # exports used only via a namespace are falsely reported as unused with
 # removable=True — live code queued for deletion.
-_NAMESPACE_IMPORT_PATTERN = re.compile(
-    r"import\s+\*\s+as\s+\w+\s+from\s*['\"]([^'\"]+)['\"]"
-)
+_NAMESPACE_IMPORT_PATTERN = re.compile(r"import\s+\*\s+as\s+\w+\s+from\s*['\"]([^'\"]+)['\"]")
 
 # Bare side-effect import: `import './polyfill';` — executes the module without
 # binding any names, consuming its entire export surface.
-_SIDE_EFFECT_IMPORT_PATTERN = re.compile(
-    r"^\s*import\s*['\"]([^'\"]+)['\"]", re.MULTILINE
-)
+_SIDE_EFFECT_IMPORT_PATTERN = re.compile(r"^\s*import\s*['\"]([^'\"]+)['\"]", re.MULTILINE)
 
 # Dynamic import: `const m = await import('./heavy');` — lazily loads the whole
 # module at runtime; individual consumed names are invisible statically, so the
@@ -145,32 +359,307 @@ _DYNAMIC_IMPORT_PATTERN = re.compile(r"import\(\s*['\"]([^'\"]+)['\"]\s*\)")
 # consumption semantics as a dynamic import.
 _REQUIRE_PATTERN = re.compile(r"(?<![\w$.])require\(\s*['\"]([^'\"]+)['\"]\s*\)")
 
-# className="..." or className={...} in JSX
-_CLASSNAME_PATTERN = re.compile(
-    r"class(?:Name)?\s*[=:]\s*['\"]([^'\"]+)['\"]|"
-    r"class(?:Name)?\s*[=:]\s*\{`([^`]+)`\}|"
-    r"classNames\([^)]*['\"]([\w\s-]+)['\"]",
-)
+# JSX attribute quotes do not use JavaScript backslash escaping. Keep their
+# delimiter parsing separate from strings inside JavaScript expressions.
+_JS_LITERAL_PATTERN = re.compile(r"""'(?:\\[\s\S]|[^'\\\r\n])*'|"(?:\\[\s\S]|[^"\\\r\n])*"|`(?:\\[\s\S]|[^`\\])*`""")
+_JS_COMMENT_PATTERN = re.compile(r"//[^\r\n]*|/\*[\s\S]*?\*/")
+_JSX_TAG_PATTERN = re.compile(r"<(?:[^\W\d]|\$|[^\x00-\x7f\s])(?:[\w$:.-]|[^\x00-\x7f\s])*(?=[\s/>])")
+_JSX_ATTRIBUTE_PATTERN = re.compile(r"(?:[^\W\d]|[$:]|[^\x00-\x7f\s])(?:[\w$:.-]|[^\x00-\x7f\s])*")
+_CLASS_PROPERTY_PATTERN = re.compile(r"""(?<![\w$])(?:className|class|['"]className['"]|['"]class['"])\s*:\s*""")
+_CLASSNAMES_CALL_PATTERN = re.compile(r"(?<![\w$])(?:classNames|clsx)\s*(?=\()")
+_JSX_ENTITY_PATTERN = re.compile(r"&(?:#[xX][0-9a-fA-F]+|#[0-9]+|[a-zA-Z][a-zA-Z0-9]*);")
+_HTML_CLASS_SPACE_PATTERN = re.compile(r"[ \t\r\n\f]+")
+
+
+def _js_delimited_end(content: str, start: int, *, limit: int | None = None) -> int | None:
+    """Find a closing JS delimiter without treating quoted braces as syntax."""
+    closing = {"{": "}", "[": "]", "(": ")"}
+    stack = [closing[content[start]]]
+    index = start + 1
+    limit = len(content) if limit is None else limit
+    while index < limit:
+        skipped = _JS_LITERAL_PATTERN.match(content, index, limit) or _JS_COMMENT_PATTERN.match(content, index, limit)
+        if skipped:
+            index = skipped.end()
+            continue
+        char = content[index]
+        if char in closing:
+            stack.append(closing[char])
+        elif char in "}])":
+            if char != stack.pop():
+                return None
+            if not stack:
+                return index + 1
+        index += 1
+    return None
+
+
+def _class_property_value(content: str, start: int) -> str | None:
+    """Read a complete property expression, retaining uncertainty for operators."""
+    index = start
+    while index < len(content):
+        skipped = _JS_LITERAL_PATTERN.match(content, index) or _JS_COMMENT_PATTERN.match(content, index)
+        if skipped:
+            index = skipped.end()
+            continue
+        if content[index] in "{[(":
+            end = _js_delimited_end(content, index)
+            if end is None:
+                return None
+            index = end
+            continue
+        if content[index] in ",};)]":
+            break
+        index += 1
+    return content[start:index]
+
+
+def _decode_jsx_attribute(value: str) -> str | None:
+    """Decode semicolon-terminated JSX entities once, without HTML error recovery."""
+    valid = True
+
+    def entity(match: re.Match) -> str:
+        nonlocal valid
+        raw = match.group()
+        if not raw.startswith("&#"):
+            if raw == "&apos;":
+                return "'"
+            number = name2codepoint.get(raw[1:-1])
+            return chr(number) if number is not None else raw
+        code = raw[2:-1]
+        hexadecimal = code[:1].lower() == "x"
+        digits = (code[1:] if hexadecimal else code).lstrip("0") or "0"
+        if len(digits) > (6 if hexadecimal else 7):
+            valid = False
+            return raw
+        number = int(digits, 16 if hexadecimal else 10)
+        if not 0 < number <= 0x10FFFF or 0xD800 <= number <= 0xDFFF:
+            valid = False
+            return raw
+        # JSX numeric entities represent their code point directly; unlike
+        # html.unescape, C1 controls must not be changed to Windows-1252 text.
+        return chr(number)
+
+    decoded = _JSX_ENTITY_PATTERN.sub(entity, value)
+    return decoded if valid else None
+
+
+def _jsx_class_attributes(content: str, attribute_positions: set[int] | None = None):
+    """Yield raw JSX values or JS expressions from possible opening tags.
+
+    Looking at every possible tag intentionally over-approximates tags inside
+    source strings rather than missing nested JSX after quoted child text.
+    """
+    for tag in _JSX_TAG_PATTERN.finditer(content):
+        index = tag.end()
+        limit = min(len(content), tag.start() + 8192)
+        while index < limit:
+            if content[index].isspace() or content[index] == "/":
+                index += 1
+                continue
+            if content[index] == ">":
+                break
+            if content[index] == "{":
+                end = _js_delimited_end(content, index, limit=limit)
+                if end is None:
+                    yield False, None
+                    break
+                if content[index + 1 : end - 1].lstrip().startswith("..."):
+                    yield False, None  # Spread props may supply any global class.
+                index = end
+                continue
+            name = _JSX_ATTRIBUTE_PATTERN.match(content, index, limit)
+            if name is None:
+                break  # Not an attribute: do not walk the remaining file per candidate.
+            wanted = name.group() in {"className", "class"}
+            if wanted and attribute_positions is not None:
+                attribute_positions.add(name.start())
+            index = name.end()
+            while index < limit and content[index].isspace():
+                index += 1
+            if index >= limit or content[index] != "=":
+                continue
+            index += 1
+            while index < limit and content[index].isspace():
+                index += 1
+            if index == limit:
+                if wanted:
+                    yield False, None
+                break
+            if content[index] in "'\"":
+                end = content.find(content[index], index + 1, limit)
+                if end < 0:
+                    if wanted or limit < len(content):
+                        yield False, None
+                    break
+                if wanted:
+                    yield True, content[index + 1 : end]
+                index = end + 1
+            elif content[index] == "{":
+                end = _js_delimited_end(content, index, limit=limit)
+                if wanted:
+                    yield False, content[index + 1 : end - 1] if end is not None else None
+                if end is None:
+                    if not wanted:
+                        yield False, None
+                    break
+                index = end
+            else:
+                if wanted:
+                    yield False, None
+                index += 1
+        if index >= limit and limit < len(content):
+            yield False, None  # An oversized header leaves possible global uses uncertain.
+
 
 # tsconfig paths for path aliases
 _TSCONFIG_PATHS_PATTERN = re.compile(
     r'"([^"]+)"\s*:\s*\["([^"]+)"\]',
 )
 
-# CSS-module accessor usage, two forms::
-#   - dot:    `styles.card`        -> capture group 1 empty, full = "styles.card"
-#   - bracket: `styles['card-hover']` / `styles["card"]` -> capture group 1 = name
-# We deliberately match either form after a binding identifier so both
-# `styles.card` and `styles['card-hover']` register the class as used.
+# Computed keys are full quoted JavaScript literals, not identifier prefixes.
+# Keep non-ASCII continuation characters intact, including marks and ZWJ/ZWNJ.
+# Runtime token starts and the actual imported name still establish ownership.
+_JS_MODULE_BINDING = r"(?:[^\W\d]|[$])(?:[\w$]|[^\x00-\x7f\s])*"
 _CSS_MODULE_USAGE_PATTERN = re.compile(
-    r"""\b\w+\.(?:_?[\w$]+)|(\w+)\[['"]([\w$-]+)['"]\]""",
+    rf"""(?<![\w$])({_JS_MODULE_BINDING})(?:\s*\??\.\s*([\w$]+)|\s*(?:\?\.)?\s*\[\s*"""
+    r"""('(?:\\[\s\S]|[^'\\\r\n])*'|"(?:\\[\s\S]|[^"\\\r\n])*"|`(?:\\[\s\S]|[^`\\])*`)\s*\])""",
 )
+
+
+def _decode_js_string(literal: str) -> str | None:
+    """Decode a computed literal; retain uncertainty for interpolation or invalid escapes."""
+    body = literal[1:-1]
+    decoded = []
+    index = 0
+    while index < len(body):
+        char = body[index]
+        index += 1
+        if char != "\\":
+            if literal[0] == "`" and char == "$" and body[index : index + 1] == "{":
+                return None
+            decoded.append(char)
+            continue
+        if index == len(body):
+            return None
+        char = body[index]
+        index += 1
+        if char in "\r\n\u2028\u2029":
+            if char == "\r" and body[index : index + 1] == "\n":
+                index += 1
+            continue
+        if char in "xu":
+            width = 2 if char == "x" else 4
+            if char == "u" and body[index : index + 1] == "{":
+                end = body.find("}", index + 1)
+                digits = body[index + 1 : end] if end >= 0 else ""
+                index = end + 1
+            else:
+                digits = body[index : index + width]
+                index += width
+                if len(digits) != width:
+                    return None
+            if not re.fullmatch(r"[0-9a-fA-F]{1,6}", digits) or int(digits, 16) > 0x10FFFF:
+                return None
+            decoded.append(chr(int(digits, 16)))
+        elif char.isdecimal() and (char != "0" or body[index : index + 1].isdigit()):
+            return None  # Legacy octal escapes are invalid in ECMAScript modules.
+        else:
+            decoded.append(
+                {"n": "\n", "r": "\r", "t": "\t", "b": "\b", "f": "\f", "v": "\v", "0": "\0"}.get(char, char)
+            )
+    try:
+        # JavaScript Unicode escapes use UTF-16; pairs must match astral CSS names.
+        return "".join(decoded).encode("utf-16-le", "surrogatepass").decode("utf-16-le")
+    except UnicodeDecodeError:
+        return None
+
+
+def _class_expression_values(expression: str, module_bindings: set[str]) -> tuple[set[str], bool]:
+    """Recognize literal values and owned module access; keep other expressions uncertain."""
+    expression = expression.strip()
+    while expression.startswith("(") and _js_delimited_end(expression, 0) == len(expression):
+        expression = expression[1:-1].strip()
+    if _JS_LITERAL_PATTERN.fullmatch(expression):
+        decoded = _decode_js_string(expression)
+        return ({decoded}, True) if decoded is not None else (set(), False)
+    if expression in {"null", "undefined", "false", "true"}:
+        return set(), True
+    accessor = _CSS_MODULE_USAGE_PATTERN.fullmatch(expression)
+    if accessor and accessor.group(1) in module_bindings:
+        return set(), True  # The separate module pass retains stylesheet scope.
+    computed = re.match(r"([\w$]+)\s*(?:\?\.)?\s*\[", expression)
+    if (
+        computed
+        and computed.group(1) in module_bindings
+        and _js_delimited_end(expression, computed.end() - 1) == len(expression)
+    ):
+        return set(), True
+    call = _CLASSNAMES_CALL_PATTERN.match(expression)
+    if call and _js_delimited_end(expression, call.end()) == len(expression):
+        arguments = expression[call.end() + 1 : -1]
+        values = set()
+        complete = True
+        for literal in _JS_LITERAL_PATTERN.finditer(arguments):
+            decoded = _decode_js_string(literal.group())
+            if decoded is None:
+                complete = False
+            else:
+                values.add(decoded)
+        remainder = _JS_COMMENT_PATTERN.sub("", _JS_LITERAL_PATTERN.sub("", arguments))
+        return values, complete and not remainder.strip(" \t\r\n\f,")
+    # Literal branches of conditions are possible uses, but cannot prove any
+    # other global class unused. Do not execute or guess variable bindings.
+    return {
+        decoded
+        for literal in _JS_LITERAL_PATTERN.finditer(expression)
+        if (decoded := _decode_js_string(literal.group())) is not None
+    }, False
+
 
 # Detect a CSS-module import so we know which source-file class accessors
 # correspond to module classes (``import styles from './x.module.css'``).
 _CSS_MODULE_IMPORT_PATTERN = re.compile(
-    r"""import\s+(?:type\s+)?(\w+)\s+from\s+['"]([^'"]*\.module\.css)['"]""",
+    rf"""import\s+(?:\*\s+as\s+|\{{\s*default\s+as\s+)?({_JS_MODULE_BINDING})(?:\s*\}}|\s*,\s*\{{[^}}]*\}})?\s+from\s+['"]([^'"]*\.module\.css)['"]""",
 )
+_JS_IMPORT_GAP = rf"(?:\s|{_JS_COMMENT_PATTERN.pattern})*"
+_CSS_NAMED_IMPORT_PATTERN = re.compile(rf"import{_JS_IMPORT_GAP}\{{")
+_CSS_IMPORT_SOURCE_PATTERN = re.compile(rf"""{_JS_IMPORT_GAP}from{_JS_IMPORT_GAP}(['"])([^'"]*\.module\.css)\1""")
+_JS_IMPORT_NONCODE_PATTERN = re.compile(_JS_LITERAL_PATTERN.pattern + "|" + _JS_COMMENT_PATTERN.pattern)
+_CSS_IMPORT_PART_PATTERN = re.compile(_JS_LITERAL_PATTERN.pattern + "|,")
+_CSS_DEFAULT_SPECIFIER_PATTERN = re.compile(
+    rf"""(default|'(?:\\[\s\S]|[^'\\\r\n])*'|"(?:\\[\s\S]|[^"\\\r\n])*")\s+as\s+({_JS_MODULE_BINDING})"""
+)
+_CSS_IMPORT_KEYWORD_PATTERN = re.compile(r"\bimport\b")
+
+
+def _css_module_imports(content: str, code_starts: set[int]):
+    """Read runtime default bindings from complete import-specifier lists."""
+    for keyword in _CSS_IMPORT_KEYWORD_PATTERN.finditer(content):
+        if keyword.start() not in code_starts:
+            continue
+        match = _CSS_MODULE_IMPORT_PATTERN.match(content, keyword.start())
+        if match:
+            yield match.group(1), match.group(2)
+        match = _CSS_NAMED_IMPORT_PATTERN.match(content, keyword.start())
+        if match is None:
+            continue
+        end = _js_delimited_end(content, match.end() - 1)
+        source = _CSS_IMPORT_SOURCE_PATTERN.match(content, end) if end is not None else None
+        if source is None:
+            continue
+        specifiers = _JS_IMPORT_NONCODE_PATTERN.sub(
+            lambda token: " " if token.group().startswith(("//", "/*")) else token.group(),
+            content[match.end() : end - 1],
+        )
+        start = 0
+        # A comma inside a quoted import name is not a specifier separator.
+        ends = [token.start() for token in _CSS_IMPORT_PART_PATTERN.finditer(specifiers) if token.group() == ","]
+        for stop in [*ends, len(specifiers)]:
+            specifier = _CSS_DEFAULT_SPECIFIER_PATTERN.fullmatch(specifiers[start:stop].strip())
+            if specifier and (specifier.group(1) == "default" or _decode_js_string(specifier.group(1)) == "default"):
+                yield specifier.group(2), source.group(2)
+            start = stop + 1
 
 
 # ── Scanner ───────────────────────────────────────────────────────────
@@ -226,11 +715,14 @@ class DeadCodeScanner:
         # Phase 1: Build export map and import map
         exports: dict[str, list[tuple[str, int]]] = {}  # name -> [(file, line)]
         imports: dict[str, set[str]] = {}  # name -> set of files that import it
-        css_classes: dict[str, list[tuple[str, int]]] = {}  # class -> [(file, line)]
-        used_css_classes: set[str] = set()
+        css_classes: dict[str, list[_CssDefinition]] = {}
+        used_css_classes: set[str | None] = set()
+        used_css_module_classes: dict[Path, set[str | None]] = {}
+        unresolved_css_module_classes: set[str | None] = set()
         components: dict[str, str] = {}  # ComponentName -> file
         routes: list[tuple[str, str]] = []  # (route_path, file)
         star_reexports: list[tuple[str, str]] = []  # (barrel_file, module_spec)
+        file_set = {str(f.relative_to(self.project_dir)).replace("\\", "/") for f in all_files}
 
         for filepath in all_files:
             try:
@@ -255,14 +747,24 @@ class DeadCodeScanner:
             if self._is_css_file(rel_path):
                 self._parse_css_classes(content, rel_path, css_classes)
 
-            # Parse className usage in TSX/JSX files
-            if rel_path.endswith((".tsx", ".jsx")):
-                self._parse_classname_usage(content, used_css_classes)
-                # CSS-module accessor usage (styles.card / styles['card']).
-                # Only register accessors imported as a CSS module so we don't
-                # treat every object property access (e.g. `user.name`) as a
-                # CSS class.
-                self._parse_css_module_usage(content, used_css_classes)
+            # Plain JS/TS can also export class props or classNames() values.
+            if not self._is_css_file(rel_path):
+                class_source = class_usage_source(content, rel_path)
+                self._parse_classname_usage(
+                    class_source, used_css_classes, jsx=not rel_path.endswith(".ts"), import_source=content
+                )
+
+            # CSS modules can also be consumed by plain TypeScript/JavaScript
+            # files, for example when exporting class-name maps to components.
+            if not self._is_css_file(rel_path):
+                self._parse_css_module_usage(
+                    class_source,
+                    rel_path,
+                    file_set,
+                    used_css_module_classes,
+                    unresolved_css_module_classes,
+                    import_source=content,
+                )
 
             # Parse components
             if rel_path.endswith((".tsx", ".jsx")):
@@ -278,7 +780,6 @@ class DeadCodeScanner:
         # Resolve `export * from './mod'` specifiers to scanned files so that
         # every export forwarded by a barrel is treated as part of the public
         # API surface (never reported as removable).
-        file_set = {str(f.relative_to(self.project_dir)).replace("\\", "/") for f in all_files}
         star_reexported_files: set[str] = set()
         for barrel_file, module_spec in star_reexports:
             resolved = self._resolve_relative_module(barrel_file, module_spec, file_set)
@@ -292,7 +793,9 @@ class DeadCodeScanner:
         self._find_dead_routes(routes, all_files, result)
 
         # 2c. Orphaned CSS
-        self._find_orphaned_css(css_classes, used_css_classes, result)
+        self._find_orphaned_css(
+            css_classes, used_css_classes, used_css_module_classes, unresolved_css_module_classes, result
+        )
 
         # 2d. Unreferenced components
         # Collect all names that are imported somewhere (i.e., actually used)
@@ -312,11 +815,9 @@ class DeadCodeScanner:
                 d for d in dirs if not self.ignore_spec.match_file(f"{rel_root}/{d}/" if rel_root != "." else f"{d}/")
             ]
 
-            # Filter out non-included directories when include_spec is set
-            if self.include_spec:
-                dirs[:] = [
-                    d for d in dirs if self.include_spec.match_file(f"{rel_root}/{d}/" if rel_root != "." else f"{d}/")
-                ]
+            # A file whitelist need not match its parent directories (for
+            # example, "src/components/*.tsx"). Only ignored directories can
+            # be pruned; apply include patterns to the individual files below.
 
             for fname in filenames:
                 rel_path = f"{rel_root}/{fname}" if rel_root != "." else fname
@@ -325,9 +826,17 @@ class DeadCodeScanner:
                 if self.include_spec and not self.include_spec.match_file(rel_path):
                     continue
 
+                if not self._is_scannable_file(rel_path):
+                    continue
+
                 filepath = Path(root) / fname
-                if self._is_scannable_file(rel_path):
-                    files.append(filepath)
+                # A source-file symlink may resolve outside the project. Such
+                # findings could otherwise make `remove` modify external files.
+                try:
+                    filepath.resolve().relative_to(self.project_dir)
+                except (ValueError, OSError, RuntimeError):
+                    continue
+                files.append(filepath)
 
         return files
 
@@ -493,22 +1002,103 @@ class DeadCodeScanner:
                 return candidate
         return None
 
-    def _parse_css_classes(self, content: str, rel_path: str, css_classes: dict[str, list[tuple[str, int]]]) -> None:
+    def _parse_css_classes(self, content: str, rel_path: str, css_classes: dict[str, list[_CssDefinition]]) -> None:
         """Extract CSS class names defined in a stylesheet."""
-        for i, line in enumerate(content.splitlines(), 1):
+        spans, lines, standalone_rules = _css_rule_spans(content)
+        if rel_path.endswith(".module.css"):
+            for cls, definition in _module_css_definitions(content, rel_path):
+                css_classes.setdefault(cls, []).append(
+                    replace(
+                        definition,
+                        single_line_rule=definition.single_line_rule and definition.rule in standalone_rules,
+                    )
+                )
+            return
+        starts = [span[0] for span in spans]
+        offset = 0
+        for i, line in enumerate(content.splitlines(keepends=True), 1):
             for m in _CSS_CLASS_PATTERN.finditer(line):
-                cls = m.group(1)
-                css_classes.setdefault(cls, []).append((rel_path, i))
+                identifier = m.group(1)
+                if "\\" in identifier:
+                    # An unescaped colon following an escaped name begins a
+                    # pseudo-selector, not part of that class's decoded key.
+                    identifier = _CSS_IDENTIFIER_PATTERN.match(identifier).group()
+                cls = _decode_css_identifier(identifier)
+                index = bisect_right(starts, offset + m.start()) - 1
+                definition = _CssDefinition(rel_path, i, True, single_line_rule=False)
+                if index >= 0:
+                    header_start, opening, closing_line = spans[index]
+                    if offset + m.start() < opening:
+                        definition = _CssDefinition(
+                            rel_path,
+                            i,
+                            True,
+                            opening,
+                            bisect_right(lines, header_start) != bisect_right(lines, opening),
+                            single_line_rule=closing_line == i and opening in standalone_rules,
+                        )
+                css_classes.setdefault(cls, []).append(definition)
+            offset += len(line)
 
-    def _parse_classname_usage(self, content: str, used_css_classes: set[str]) -> None:
-        """Extract CSS class names used in JSX className attributes."""
-        for m in _CLASSNAME_PATTERN.finditer(content):
-            for group in m.groups():
-                if group:
-                    for cls in group.split():
-                        used_css_classes.add(cls)
+    def _parse_classname_usage(
+        self,
+        content: str,
+        used_css_classes: set[str | None],
+        *,
+        jsx: bool = True,
+        import_source: str | None = None,
+    ) -> None:
+        """Read raw JSX attributes and JavaScript literals using their own grammar."""
+        properties, calls, code_starts = class_value_positions(content, jsx=jsx)
+        module_bindings = {
+            binding
+            for binding, _ in _css_module_imports(content if import_source is None else import_source, code_starts)
+        }
 
-    def _parse_css_module_usage(self, content: str, used_css_classes: set[str]) -> None:
+        def consume(raw_jsx: bool, value: str | None) -> None:
+            if value is None:
+                used_css_classes.add(None)
+                return
+            if raw_jsx:
+                decoded = _decode_jsx_attribute(value)
+                values, complete = ({decoded}, True) if decoded is not None else (set(), False)
+            else:
+                values, complete = _class_expression_values(value, module_bindings)
+            for text in values:
+                # HTML class tokens split on ASCII whitespace, not NBSP or
+                # other Unicode spaces produced by JSX entity references.
+                used_css_classes.update(filter(None, _HTML_CLASS_SPACE_PATTERN.split(text)))
+            if not complete:
+                used_css_classes.add(None)
+
+        jsx_properties: set[int] = set()
+        for raw_jsx, value in _jsx_class_attributes(content, jsx_properties):
+            consume(raw_jsx, value)
+        for property_match in _CLASS_PROPERTY_PATTERN.finditer(content):
+            if property_match.start() in properties:
+                consume(False, _class_property_value(content, property_match.end()))
+        for key, key_start, start, compound in class_property_positions(content, jsx=jsx):
+            if key_start in jsx_properties:
+                continue  # The JSX reader has already consumed its own grammar.
+            name = _decode_js_string(key) if key[:1] in {"'", '"', "`"} else key
+            if name in {"className", "class"}:
+                consume(False, None if compound else _class_property_value(content, start))
+        for call in _CLASSNAMES_CALL_PATTERN.finditer(content):
+            if call.start() not in calls:
+                continue
+            end = _js_delimited_end(content, call.end())
+            consume(False, content[call.start() : end] if end is not None else None)
+
+    def _parse_css_module_usage(
+        self,
+        content: str,
+        rel_path: str,
+        file_set: set[str],
+        used_css_module_classes: dict[Path, set[str | None]],
+        unresolved_css_module_classes: set[str | None],
+        *,
+        import_source: str | None = None,
+    ) -> None:
         """Extract CSS-module class names consumed via object accessors.
 
         The canonical Next.js/React pattern is::
@@ -516,33 +1106,49 @@ class DeadCodeScanner:
             import styles from './Card.module.css';
             <div className={styles.card}>...</div>
 
-        We first find any ``*.module.css`` imports (binding name ``styles``)
-        so that accessor use ``styles.card`` registers ``card`` as a used
-        class. Bracket access ``styles['card-hover']`` is also captured.
+        Resolve each relative ``*.module.css`` import from its importing file
+        so that ``styles.card`` protects ``card`` only in that stylesheet.
+        Bracket access ``styles['card-hover']`` is also captured. Canonical
+        paths keep internal stylesheet symlinks and their targets consistent.
+        Classes used through unresolved imports remain uncertain so alias or
+        bundler-specific resolution cannot make live module classes removable.
         Without this, every CSS-module class is falsely reported as orphaned
         and marked removable=True, risking deletion of live styles.
         """
         # Map the local binding (e.g. ``styles``) to a CSS-module import so
         # only module accessors are treated as class names.
-        module_bindings = {m.group(1) for m in _CSS_MODULE_IMPORT_PATTERN.finditer(content)}
+        module_bindings: dict[str, Path | None] = {}
+        _, _, code_starts = class_value_positions(content, jsx=not rel_path.endswith(".ts"))
+        # Type erasure preserves offsets and decides whether an import is live.
+        # Its original clause retains quoted export names and their aliases.
+        for binding, specifier in _css_module_imports(content if import_source is None else import_source, code_starts):
+            stylesheet = self._resolve_relative_module(rel_path, specifier, file_set)
+            if stylesheet is not None and stylesheet.endswith(".module.css"):
+                module_bindings[binding] = (self.project_dir / stylesheet).resolve()
+            else:
+                module_bindings[binding] = None
         if not module_bindings:
             return
+        recognized = set()
         for m in _CSS_MODULE_USAGE_PATTERN.finditer(content):
-            groups = m.groups()
-            # Bracket form `styles['card-hover']` -> groups = (binding, name).
-            # Dot form `styles.card` -> groups = (None, None); the whole match
-            # is "binding.attr". Distinguish by whether a bracket name exists.
-            bracket_binding, bracket_name = groups
-            if bracket_name is not None:
-                if bracket_binding in module_bindings:
-                    used_css_classes.add(bracket_name)
+            if m.start() not in code_starts:
                 continue
-            # Dot form `styles.card` -> the whole match is "binding.attr".
-            full = m.group(0)
-            binding, _, attr = full.partition(".")
-            if binding in module_bindings and attr and attr[0] != "_":
-                # Skip internal/private-ish accessors (e.g. styles.toString).
-                used_css_classes.add(attr)
+            binding, dot_name, bracket_literal = m.groups()
+            if binding in module_bindings:
+                recognized.add(m.start())
+                name = dot_name if dot_name is not None else _decode_js_string(bracket_literal)
+                stylesheet_path = module_bindings[binding]
+                if stylesheet_path is None:
+                    unresolved_css_module_classes.add(name)
+                else:
+                    used_css_module_classes.setdefault(stylesheet_path, set()).add(name)
+        for binding, stylesheet_path in module_bindings.items():
+            for match in re.finditer(rf"(?<![\w$]){re.escape(binding)}\s*(?:\?\.)?\s*\[", content):
+                if match.start() in code_starts and match.start() not in recognized:
+                    if stylesheet_path is None:
+                        unresolved_css_module_classes.add(None)
+                    else:
+                        used_css_module_classes.setdefault(stylesheet_path, set()).add(None)
 
     def _parse_components(self, content: str, rel_path: str, components: dict[str, str]) -> None:
         """Extract React component definitions."""
@@ -667,11 +1273,17 @@ class DeadCodeScanner:
 
     def _find_orphaned_css(
         self,
-        css_classes: dict[str, list[tuple[str, int]]],
-        used_css_classes: set[str],
+        css_classes: dict[str, list[_CssDefinition]],
+        used_css_classes: set[str | None],
+        used_css_module_classes: dict[Path, set[str | None]],
+        unresolved_css_module_classes: set[str | None],
         result: ScanResult,
     ) -> None:
         """Find CSS classes defined but never used in JSX."""
+        module_usage_by_file: dict[str, set[str | None]] = {}
+        protected_lines: set[tuple[str, int]] = set()
+        protected_rules: set[tuple[str, int]] = set()
+        unused: list[tuple[str, _CssDefinition, bool]] = []
         for cls, locations in css_classes.items():
             # Skip common utility classes and pseudo-selectors
             if cls.startswith(
@@ -687,20 +1299,64 @@ class DeadCodeScanner:
                     "xl:",
                 )
             ):
-                continue
-            if cls in used_css_classes:
-                continue
-            for file, line in locations:
-                result.findings.append(
-                    Finding(
-                        file=file,
-                        line=line,
-                        name=cls,
-                        category="orphaned_css",
-                        detail=f"CSS class '.{cls}' is not used in any JSX className",
-                        removable=True,
-                    )
+                # Skipped utility classes still protect a shared rule/line from
+                # whole-line removal through a separate unused selector.
+                protected_lines.update((definition.file, definition.line) for definition in locations)
+                protected_rules.update(
+                    (definition.file, definition.rule) for definition in locations if definition.rule is not None
                 )
+                continue
+            for definition in locations:
+                file, line = definition.file, definition.line
+                if definition.global_scope:
+                    used = cls in used_css_classes
+                else:
+                    if file not in module_usage_by_file:
+                        module_usage_by_file[file] = used_css_module_classes.get(
+                            (self.project_dir / file).resolve(), set()
+                        )
+                    used = cls in module_usage_by_file[file]
+                uncertain = (
+                    None in used_css_classes
+                    if definition.global_scope
+                    else cls in unresolved_css_module_classes
+                    or None in unresolved_css_module_classes
+                    or None in module_usage_by_file[file]
+                )
+                if used or uncertain:
+                    protected_lines.add((file, line))
+                    if definition.rule is not None:
+                        protected_rules.add((file, definition.rule))
+                if not used:
+                    unused.append((cls, definition, uncertain))
+        for cls, definition, uncertain in unused:
+            shared = (definition.file, definition.line) in protected_lines or (
+                definition.rule is not None and (definition.file, definition.rule) in protected_rules
+            )
+            result.findings.append(
+                Finding(
+                    file=definition.file,
+                    line=definition.line,
+                    name=cls,
+                    category="orphaned_css",
+                    detail=(
+                        f"CSS class '.{cls}' may be used through a computed class expression"
+                        if uncertain and definition.global_scope
+                        else f"CSS module class '.{cls}' may be used through an unresolved stylesheet import or computed key"
+                        if uncertain
+                        else f"CSS class '.{cls}' shares a rule or line with a used selector; remove manually"
+                        if shared
+                        else f"CSS class '.{cls}' has a selector across multiple lines; remove manually"
+                        if definition.multiline_header
+                        else f"CSS class '.{cls}' has no complete one-line rule; remove manually"
+                        if not definition.single_line_rule
+                        else f"CSS class '.{cls}' is not used in any JSX className"
+                    ),
+                    removable=not (
+                        uncertain or shared or definition.multiline_header or not definition.single_line_rule
+                    ),
+                )
+            )
 
     def _find_unreferenced_components(
         self,
