@@ -123,6 +123,13 @@ _CSS_SELECTOR_TOKEN_PATTERN = re.compile(
     rf"{_CSS_ESCAPE}|:(global|local)(?![\w-]|[^\x00-\x7f]|\\)|\.({_CSS_IDENTIFIER})|[(),\[\]]"
 )
 _CSS_BLOCK_TOKEN_PATTERN = re.compile(_CSS_ESCAPE + r"|[{};()\[\]]")
+# Whole-line removal needs every selector alternative to depend on a class
+# whose usage the scanner represents. Element/ID alternatives and arbitrary
+# pseudo-selectors remain diagnostic-only instead of losing unrelated styles.
+_CSS_REMOVABLE_SELECTOR = (
+    rf"(?:\.{_CSS_IDENTIFIER}|:(?:global|local)(?:\(\s*\.{_CSS_IDENTIFIER}\s*\)|\s+\.{_CSS_IDENTIFIER}))"
+)
+_CSS_REMOVABLE_HEADER = re.compile(rf"\s*{_CSS_REMOVABLE_SELECTOR}(?:\s*,\s*{_CSS_REMOVABLE_SELECTOR})*\s*")
 
 
 def _decode_css_identifier(identifier: str) -> str:
@@ -236,13 +243,23 @@ def _module_css_definitions(content: str, rel_path: str):
     yield from definitions
 
 
-def _global_css_rule_spans(content: str):
-    """Map existing global findings to complete rules without adding selectors."""
+def _css_rule_spans(content: str):
+    """Map complete rules and identify those safe for whole-line removal."""
     masked = _CSS_NONCODE_PATTERN.sub(
         lambda match: match.group() if match.group().startswith("\\") else re.sub(r"[^\n]", " ", match.group()), content
     )
     lines = [0, *(match.end() for match in re.finditer("\n", content))]
+    # Keep multiline comment edges substantive: deleting a line containing
+    # either delimiter can corrupt neighboring lines outside the rule span.
+    comments_masked = _CSS_NONCODE_PATTERN.sub(
+        lambda match: (
+            " " * len(match.group()) if match.group().startswith("/*") and "\n" not in match.group() else match.group()
+        ),
+        content,
+    )
     spans: list[tuple[int, int, int | None]] = []
+    standalone_rules: set[int] = set()
+    line_bounds: dict[int, tuple[int, int]] = {}
     blocks: list[int | None] = []
     start = 0
     parentheses = brackets = 0
@@ -272,11 +289,27 @@ def _global_css_rule_spans(content: str):
         elif token == "}":
             if blocks and (index := blocks.pop()) is not None:
                 header_start, opening, _ = spans[index]
-                spans[index] = (header_start, opening, bisect_right(lines, match.start()))
+                closing_line = bisect_right(lines, match.start())
+                spans[index] = (header_start, opening, closing_line)
+                if closing_line not in line_bounds:
+                    line_start = lines[closing_line - 1]
+                    line_end = lines[closing_line] if closing_line < len(lines) else len(content)
+                    line = comments_masked[line_start:line_end]
+                    line_bounds[closing_line] = (
+                        line_start + len(line) - len(line.lstrip()),
+                        line_start + len(line.rstrip()),
+                    )
+                # Neither sibling rules, directives nor enclosing braces can
+                # survive the CLI's whole-line deletion. Only comments and
+                # whitespace may surround the candidate's complete rule span.
+                if line_bounds[closing_line] == (header_start, match.end()) and _CSS_REMOVABLE_HEADER.fullmatch(
+                    masked[header_start:opening]
+                ):
+                    standalone_rules.add(opening)
             start = match.end()
         else:
             start = match.end()
-    return spans, lines
+    return spans, lines, standalone_rules
 
 
 # import statements
@@ -971,11 +1004,16 @@ class DeadCodeScanner:
 
     def _parse_css_classes(self, content: str, rel_path: str, css_classes: dict[str, list[_CssDefinition]]) -> None:
         """Extract CSS class names defined in a stylesheet."""
+        spans, lines, standalone_rules = _css_rule_spans(content)
         if rel_path.endswith(".module.css"):
             for cls, definition in _module_css_definitions(content, rel_path):
-                css_classes.setdefault(cls, []).append(definition)
+                css_classes.setdefault(cls, []).append(
+                    replace(
+                        definition,
+                        single_line_rule=definition.single_line_rule and definition.rule in standalone_rules,
+                    )
+                )
             return
-        spans, lines = _global_css_rule_spans(content)
         starts = [span[0] for span in spans]
         offset = 0
         for i, line in enumerate(content.splitlines(keepends=True), 1):
@@ -997,7 +1035,7 @@ class DeadCodeScanner:
                             True,
                             opening,
                             bisect_right(lines, header_start) != bisect_right(lines, opening),
-                            single_line_rule=closing_line == i,
+                            single_line_rule=closing_line == i and opening in standalone_rules,
                         )
                 css_classes.setdefault(cls, []).append(definition)
             offset += len(line)

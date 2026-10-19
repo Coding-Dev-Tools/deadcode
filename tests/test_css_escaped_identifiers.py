@@ -68,8 +68,9 @@ def test_remove_preserves_complete_escaped_names_and_keeps_stylesheet_scope(tmp_
     live = selector + " { color: red; }\n"
     (tmp_path / "Card.module.css").write_text(live + ".unused { color: blue; }\n", encoding="utf-8")
     (tmp_path / "Other.module.css").write_text(selector + " {}\n", encoding="utf-8")
-    (tmp_path / "consumer.ts").write_text(
-        "import styles from './Card.module.css';\nconst selected = styles" + accessor + ";\n", encoding="utf-8"
+    # Preserve the intended JavaScript line-continuation bytes on Windows too.
+    (tmp_path / "consumer.ts").write_bytes(
+        ("import styles from './Card.module.css';\nconst selected = styles" + accessor + ";\n").encode("utf-8")
     )
 
     findings = DeadCodeScanner(tmp_path).scan().orphaned_css
