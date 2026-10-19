@@ -27,6 +27,7 @@ class _Token:
 _WORD = re.compile(r"[\w$]+", re.UNICODE)
 _JSX_OPENING = re.compile(r"<(?:[^\W\d]|\$|[^\x00-\x7f\s])(?:[\w$:.-]|[^\x00-\x7f\s])*(?=[\s/><])(?!\s*=)")
 _JSX_EXTENDS = re.compile(r"\s+extends\s+(?![=>])")
+_JSX_DIRECT_ARROW_HEAD = re.compile(r"<[\w$\s.,?:|&\[\]{}]+>\s*\([\w$\s.,?:|&\[\]{}]*\)\s*=>")
 _JSX_CLOSING = re.compile(r"</(?:(?:[\w$]|[^\x00-\x7f\s])(?:[\w$:.-]|[^\x00-\x7f\s])*\s*)?>")
 _CLASS_VALUE_OPERATORS = {":", "=", "+=", "-=", "*=", "/=", "%=", "**=", "&=", "|=", "^=", "&&=", "||=", "??="}
 _PREFIX = {"keyof", "readonly", "unique", "typeof", "asserts", "abstract", "new"}
@@ -158,14 +159,23 @@ def _jsx_type_parameter_head(source: str, index: int) -> bool:
     opening = _JSX_OPENING.match(source, index)
     if not opening or not _JSX_EXTENDS.match(source, opening.end()):
         return False
-    view = _RuntimeView(source[index : index + 8192], jsx=False)
-    end = view.angle_end(0)
-    if end is None or view.value(end) != "(" or end not in view.pairs:
-        return False
-    body = view.pairs[end] + 1
-    if view.value(body) == ":":
-        body = view.type_end(body + 1)
-    return body is not None and view.value(body) in {"=>", "{"}
+    limit = min(len(source), index + 8192)
+    # A direct arrow with flat, unquoted tokens has a complete lexical boundary.
+    # Validate only that header first; complex types and unsuccessful candidates
+    # retain the original full lookahead and its conservative grammar.
+    arrow = _JSX_DIRECT_ARROW_HEAD.match(source, index, limit)
+    stops = (arrow.end(), limit) if arrow and arrow.end() < limit else (limit,)
+    for stop in stops:
+        view = _RuntimeView(source[index:stop], jsx=False)
+        end = view.angle_end(0)
+        if end is None or view.value(end) != "(" or end not in view.pairs:
+            continue
+        body = view.pairs[end] + 1
+        if view.value(body) == ":":
+            body = view.type_end(body + 1)
+        if body is not None and view.value(body) in {"=>", "{"}:
+            return True
+    return False
 
 
 def _jsx_element(source: str, index: int, depth: int) -> _Token | None:
