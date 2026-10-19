@@ -1000,7 +1000,15 @@ def class_property_positions(source: str, *, depth: int = 0, jsx: bool = True) -
                 and tokens[index - 1].value == "["
                 and tokens[operator : operator + 1]
                 and tokens[operator].value == "]"
-                and (tokens[index - 2].word or tokens[index - 2].value in {")", "]", "!"})
+                and (
+                    tokens[index - 2].word
+                    or tokens[index - 2].value in {")", "]", "!"}
+                    or (
+                        tokens[index - 2].value in {"{", ","}
+                        and operator + 1 < len(tokens)
+                        and tokens[operator + 1].value == ":"
+                    )
+                )
             ):
                 operator += 1
             elif operator >= len(tokens) or tokens[operator].value not in {":", "="}:
